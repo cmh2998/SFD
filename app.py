@@ -631,18 +631,15 @@ def staffordshire_bbox():
     }
 
 
+import json
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+BOUNDARY_PATH = BASE_DIR / "county_region.GeoJSON"
+
 @app.get("/staffordshire/boundary")
 def staffordshire_boundary():
-    try:
-        area_poly, _, _, includes = _load_staffs_plus_stoke_polygon_and_bbox()
-        gdf = gpd.GeoDataFrame(
-            [{"name": "Staffordshire + Stoke-on-Trent", "includes": ", ".join(includes)}],
-            geometry=[area_poly],
-            crs="EPSG:4326",
-        )
-        return json.loads(gdf.to_json())
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"/staffordshire/boundary failed: {e}")
+    return json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
 
 
 @app.get("/staffordshire/districts")
