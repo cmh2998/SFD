@@ -637,9 +637,18 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 BOUNDARY_PATH = BASE_DIR / "county_region.GeoJSON"
 
+from pathlib import Path
+import json
+
+BASE_DIR = Path(__file__).resolve().parent
+BOUNDARY_PATH = BASE_DIR / "county_region.GeoJSON"
+
 @app.get("/staffordshire/boundary")
 def staffordshire_boundary():
-    return json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
+    try:
+        return json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"/staffordshire/boundary failed: {e}")
 
 
 @app.get("/staffordshire/districts")
