@@ -598,9 +598,13 @@ def health():
     return {"ok": True}
 
 
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+
 @app.get("/", response_class=HTMLResponse)
 def home():
-    with open("templates/index.html") as f:
+    with open(BASE_DIR / "templates" / "index.html") as f:
         return f.read()
 
 
