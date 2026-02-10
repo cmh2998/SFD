@@ -604,8 +604,9 @@ BASE_DIR = Path(__file__).resolve().parent
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    with open(BASE_DIR / "templates" / "index.html") as f:
-        return f.read()
+    from pathlib import Path
+    file_path = Path(__file__).parent / "templates" / "index.html"
+    return file_path.read_text(encoding="utf-8")
 
 
 @app.get("/station/{station_id}")
