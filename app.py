@@ -16,7 +16,7 @@ from shapely.prepared import prep
 
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
-SHAPEFILE_PATH = BASE_DIR / "county_region.shp"
+SHAPEFILE_PATH = BASE_DIR / "county_region.GeoJSON"
 
 # Optional, but useful on some setups
 os.environ["SHAPE_RESTORE_SHX"] = "YES"
