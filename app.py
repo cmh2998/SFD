@@ -22,6 +22,13 @@ import secrets
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+import time
+import json
+import urllib.parse
+import urllib.request
+from typing import Dict, Any
+from fastapi import HTTPException
+
 app = FastAPI()
 
 # ----------------------------
@@ -700,3 +707,84 @@ def staffordshire_status(offset: int = 0, limit: int = 10):
         "hasMore": end < total,
         "nextOffset": end if end < total else None,
     }
+
+# --- EA Flood Warning Summary (Staffordshire) ---
+
+_EA_FLOOD_SUMMARY_CACHE: Dict[str, Any] = {
+    "ts": 0.0,
+    "data": None,
+}
+
+def _fetch_ea_flood_summary_staffordshire() -> Dict[str, Any]:
+    # EA Flood Monitoring API
+    # Severity levels:
+    # 1 = Severe Flood Warning
+    # 2 = Flood Warning
+    # 3 = Flood Alert
+    # 4 = Warning no longer in force
+
+    base = "https://environment.data.gov.uk/flood-monitoring/id/floods"
+    params = {
+        "county": "Staffordshire",
+        "min-severity": "3",
+        "_limit": "500",
+    }
+
+    url = f"{base}?{urllib.parse.urlencode(params)}"
+
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+
+    with urllib.request.urlopen(req, timeout=6) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    items = payload.get("items", []) or []
+
+    counts = {
+        "severe": 0,
+        "warning": 0,
+        "alert": 0,
+        "total": 0,
+    }
+
+    for it in items:
+        sev = it.get("severityLevel")
+        if sev == 1:
+            counts["severe"] += 1
+        elif sev == 2:
+            counts["warning"] += 1
+        elif sev == 3:
+            counts["alert"] += 1
+
+    counts["total"] = counts["severe"] + counts["warning"] + counts["alert"]
+
+    return {
+        "county": "Staffordshire",
+        "counts": counts,
+        "source": "Environment Agency Flood Monitoring API",
+        "fetchedAtEpoch": int(time.time()),
+    }
+
+
+@app.get("/api/flood-warnings-summary")
+def get_flood_warnings_summary() -> Dict[str, Any]:
+    # Cache for 60 seconds to avoid hammering EA
+    now = time.time()
+    ttl_seconds = 60
+
+    cached = _EA_FLOOD_SUMMARY_CACHE.get("data")
+    ts = float(_EA_FLOOD_SUMMARY_CACHE.get("ts") or 0.0)
+
+    if cached and (now - ts) < ttl_seconds:
+        return cached
+
+    try:
+        data = _fetch_ea_flood_summary_staffordshire()
+    except Exception as e:
+        # Fail safe: return cached if available
+        if cached:
+            return cached
+        raise HTTPException(status_code=502, detail=f"EA flood warning summary unavailable: {e}")
+
+    _EA_FLOOD_SUMMARY_CACHE["data"] = data
+    _EA_FLOOD_SUMMARY_CACHE["ts"] = now
+    return data
