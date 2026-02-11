@@ -98,7 +98,7 @@ _STATION_META_TTL_SECONDS = 3600  # 1 hour
 
 # Catchment convex hulls
 _CATCHMENTS_CACHE = {"ts": 0.0, "geojson": None}
-_CATCHMENTS_TTL_SECONDS = 3600  # 1 hour
+_CATCHMENTS_TTL_SECONDS = 21600  # 6 hour
 
 # EA flood warnings polygons
 _FLOODWARN_CACHE = {"ts": 0.0, "geojson": None}
