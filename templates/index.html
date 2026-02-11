@@ -1537,7 +1537,7 @@ function exportSitrepPdf() {
   const hotspotName = hotspots.length ? hotspots[0].worst || "Unknown" : "None identified"
   const hotspotSites = hotspots.length ? hotspots[0].count || 0 : 0
 
-  const operationalPicture = `Currently ${highCount} sites are at High state and ${elevCount} at Elevated state. Trend: ${trendLabel}. Primary cluster: ${hotspotName}${hotspots.length ? ` (${hotspotSites} sites)` : ""}. Reporting: ${countsByFreshness.Live || 0} Live, ${countsByFreshness.Offline || 0} Offline.`
+  const operationalPicture = `Currently ${highCount} sites are at High state and ${elevCount} at Elevated state. Trend: ${trendLabel}. Primary area of concern: ${hotspotName}${hotspots.length ? ` (${hotspotSites} sites)` : ""}. Reporting: ${countsByFreshness.Live || 0} Live, ${countsByFreshness.Offline || 0} Offline.`
 
   // Full stations table, keep same as before
   const tableRows = rows
@@ -1671,7 +1671,7 @@ function exportSitrepPdf() {
     <div class="title">Staffordshire Flood SITREP</div>
     <div class="meta">
       Generated: ${esc(generatedAt)}<br>
-      Last refresh: ${esc(lastRefresh)}
+      Last data refresh: ${esc(lastRefresh)}
     </div>
   </div>
   <img src="/CCU.png" alt="CCU" class="logo">
