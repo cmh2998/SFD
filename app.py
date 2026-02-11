@@ -149,28 +149,38 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
             detail=f"Failed to read shapefile at {SHAPEFILE_PATH}: {e}",
         )
 
-    name_col = _find_name_column(gdf)
-    if not name_col:
-        raise HTTPException(
-            status_code=500,
-            detail=f"No name column found. Columns: {list(gdf.columns)}",
-        )
+wanted = ["staffordshire", "stoke-on-trent", "stoke on trent", "stoke-on trent"]
 
-    wanted = ["staffordshire", "stoke-on-trent", "stoke on trent", "stoke-on trent"]
-    mask = None
-    for w in wanted:
-        m = gdf[name_col].str.contains(w, case=False, na=False)
-        mask = m if mask is None else (mask | m)
+kept = []
+for f in features:
+    props = f.get("properties") or {}
+    nm = str(props.get("LAD17NM") or props.get("NAME") or props.get("Name") or props.get("name") or "").strip()
+    if not nm:
+        continue
+    low = nm.lower()
+    if any(w in low for w in wanted):
+        kept.append(f)
 
-    area = gdf[mask]
+if not kept:
+    raise HTTPException(status_code=404, detail="Could not find Staffordshire or Stoke-on-Trent in GeoJSON properties")
+
+geoms = []
+names = []
+for f in kept:
+    geoms.append(shape(f.get("geometry")))
+    props = f.get("properties") or {}
+    names.append(str(props.get("LAD17NM") or props.get("NAME") or props.get("Name") or props.get("name") or "").strip())
+    
     if area.empty:
         raise HTTPException(
             status_code=404,
             detail=f"Could not find Staffordshire or Stoke-on-Trent in column {name_col}",
         )
 
-    area_wgs84 = area.to_crs(epsg=4326)
-    area_poly = area_wgs84.unary_union
+
+area_poly = geoms[0]
+for g in geoms[1:]:
+    area_poly = area_poly.union(g)
 
     # Fix invalid geometries that can crash within/contains
     try:
@@ -179,10 +189,10 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
     except Exception:
         pass
 
-    minx, miny, maxx, maxy = area_wgs84.total_bounds
+    minx, miny, maxx, maxy = area_poly.bounds
     bbox = {"minLon": minx, "minLat": miny, "maxLon": maxx, "maxLat": maxy}
 
-    includes = sorted(list({str(v) for v in area[name_col].dropna().unique()}))
+    includes = sorted(list({n for n in names if n}))
 
     _AREA_CACHE["ts"] = now
     _AREA_CACHE["poly"] = area_poly
