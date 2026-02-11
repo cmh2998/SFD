@@ -22,7 +22,7 @@ SHAPEFILE_PATH = BASE_DIR / "county_region.GeoJSON"
 os.environ["SHAPE_RESTORE_SHX"] = "YES"
 
 # ----------------------------
-# Simple in-memory caches
+# Simple in-memory cache
 # ----------------------------
 _AREA_CACHE = {
     "ts": 0.0,
