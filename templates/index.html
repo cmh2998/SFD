@@ -1395,16 +1395,26 @@ async function refreshFloodWarningsSummary() {
 
     const data = await res.json()
     const c = data?.counts || {}
+    const nextAlerts = Number(c.alert || 0)
+    const nextWarnings = Number(c.warning || 0)
+    const nextSevere = Number(c.severe || 0)
+    const previous = window.latestFloodWarnings || null
+    const previousSig = previous ? `${previous.severe}|${previous.warnings}|${previous.alerts}` : null
+
+    const nextAlerts = Number(c.alert || 0)
+    const nextWarnings = Number(c.warning || 0)
+    const nextSevere = Number(c.severe || 0)
 
     window.latestFloodWarnings = {
-      alerts: Number(c.alert || 0),
-      warnings: Number(c.warning || 0),
-      severe: Number(c.severe || 0),
+      alerts: nextAlerts,
+      warnings: nextWarnings,
+      severe: nextSevere,
       fetchedAtEpoch: data?.fetchedAtEpoch || null,
-      source: data?.source || "Environment Agency Flood Monitoring API",
+      changed: previousSig !== null && previousSig !== `${nextSevere}|${nextWarnings}|${nextAlerts}`
     }
+
   } catch (e) {
-    // Fail safe. Leave existing value alone.
+    // leave previous data in place
   }
 }
 function exportSitrepPdf() {
@@ -1651,6 +1661,11 @@ function exportSitrepPdf() {
   .pill-elev{border-color:#c58b00;background:#fff8e6}
   .pill-norm{border-color:#2b7a2c;background:#f0fbf0}
   .pill-data{border-color:#666;background:#f6f6f6}
+  .pill-alert{border-color:#c58b00;background:#fff0c7}
+  .pill-warning{border-color:#b85c00;background:#ffe1c2}
+  .pill-severe{border-color:#c9091c;background:#ffd6d6}
+  .pill-changed{outline:2px solid #111; outline-offset:2px}
+
 
   table{border-collapse:collapse;width:100%;font-size:12px}
   th,td{border:1px solid #cfcfcf;padding:6px;vertical-align:top}
@@ -1706,13 +1721,15 @@ ${
   window.latestFloodWarnings
     ? `<div class="divider"></div>
        <h3>Flood warnings for Staffordshire</h3>
-       <div class="kpi">
-         <div class="pill pill-high"><b>Severe Flood Warnings</b> ${Number(window.latestFloodWarnings.severe || 0)}</div>
-         <div class="pill"><b>Flood Warnings</b> ${Number(window.latestFloodWarnings.warnings || 0)}</div>
-         <div class="pill pill-elev"><b>Flood Alerts</b> ${Number(window.latestFloodWarnings.alerts || 0)}</div>
-       </div>
-       <div class="small muted" style="margin-top:6px">
-         Source: ${esc(window.latestFloodWarnings.source || "Environment Agency Flood Monitoring API")}
+       <div class="kpi ${window.latestFloodWarnings.changed ? "pill-changed" : ""}">
+         <div class="pill pill-severe"><b>Severe Flood Warnings</b> ${Number(window.latestFloodWarnings.severe || 0)}</div>
+         <div class="pill pill-warning"><b>Flood Warnings</b> ${Number(window.latestFloodWarnings.warnings || 0)}</div>
+         <div class="pill pill-alert"><b>Flood Alerts</b> ${Number(window.latestFloodWarnings.alerts || 0)}</div>
+         <div class="pill pill-data"><b>Last EA update</b> ${
+           window.latestFloodWarnings.fetchedAtEpoch
+             ? new Date(window.latestFloodWarnings.fetchedAtEpoch * 1000).toLocaleString()
+             : "Unknown"
+         }</div>
        </div>`
     : ``
 }
@@ -1741,9 +1758,7 @@ ${
           <span class="muted">River:</span> ${esc(worstRiver || "Unknown")}<br>
           <span class="muted">Last reported:</span> ${esc(worstTime || "Unknown")}
         </div>
-      </div>
-
-      <div class="card">
+      
         <h3>Site counts by state</h3>
         <div class="kpi">
           <div class="pill pill-high"><b>High</b> ${countsByState.High}</div>
@@ -1751,7 +1766,9 @@ ${
           <div class="pill pill-norm"><b>Normal</b> ${countsByState.Normal}</div>
           <div class="pill pill-data"><b>No data</b> ${countsByState["No data"]}</div>
         </div>
-
+    <div class="small muted" style="margin-top:6px">
+      
+    </div>
         <div class="divider"></div>
 
         <h3 style="margin-top:0">Reading freshness overview</h3>
@@ -1967,22 +1984,6 @@ ${
       </div>
     </div>
 
-    ${
-      floodWarningsSummary
-        ? `<div class="card" style="margin-top:12px">
-            <h3>Flood warnings summary</h3>
-            <div class="kpi">
-              <div class="pill"><b>Flood Alerts</b> ${floodWarningsSummary.alerts}</div>
-              <div class="pill"><b>Flood Warnings</b> ${floodWarningsSummary.warnings}</div>
-              <div class="pill"><b>Severe Flood Warnings</b> ${floodWarningsSummary.severe}</div>
-            </div>
-            <div class="small muted" style="margin-top:6px">
-              Shown only when flood warning data is already available in memory.
-            </div>
-          </div>`
-        : ""
-    }
-
   </div>
 </div>
 
@@ -2003,7 +2004,9 @@ ${
     </table>
   </div>
 </div>
-
+<div class="footer-note" style="margin-top:14px">
+  Source: Environment Agency Flood Monitoring API
+</div>
 </body>
 </html>
 `)
