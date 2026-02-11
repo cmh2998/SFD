@@ -1400,6 +1400,61 @@ document.getElementById("markerMode")?.addEventListener("change", async (e) => {
 })
 
 /* ------------------------------------------------------------
+   Data loading
+   ------------------------------------------------------------ */
+
+async function loadBoundary() {
+    try {
+        const res = await fetch("/staffordshire/boundary", { cache: "no-store" })
+        if (!res.ok) throw new Error(`boundary ${res.status}`)
+        const geojson = await res.json()
+
+        if (boundaryLayer) map.removeLayer(boundaryLayer)
+
+        boundaryLayer = L.geoJSON(geojson, {
+            pane: "polygonsPane",
+            style: { color: "#111111", weight: 2, fillOpacity: 0 }
+        }).addTo(map)
+
+        // Optional: zoom map to boundary once loaded
+        try { map.fitBounds(boundaryLayer.getBounds(), { padding: [12, 12] }) } catch (e) {}
+    } catch (e) {
+        console.error("loadBoundary failed:", e)
+    }
+}
+
+async function loadStations() {
+    try {
+        const res = await fetch("/staffordshire/stations", { cache: "no-store" })
+        if (!res.ok) throw new Error(`stations ${res.status}`)
+        const data = await res.json()
+
+        Object.keys(markers).forEach(id => {
+            try { map.removeLayer(markers[id]) } catch (e) {}
+        })
+        markers = {}
+
+        ;(data.stations || []).forEach(st => {
+            if (st.lat == null || st.long == null) return
+            const marker = L.circleMarker([st.lat, st.long], markerBaseStyle())
+            marker.addTo(map)
+            marker.bindPopup("Loading...")
+            markers[st.id] = marker
+        })
+
+        stationsLoaded = true
+    } catch (e) {
+        console.error("loadStations failed:", e)
+    }
+}
+
+async function fetchStatusPage(offset, limit) {
+    const url = `/staffordshire/status?offset=${offset}&limit=${limit}`
+    const res = await fetch(url, { cache: "no-store" })
+    if (!res.ok) throw new Error(`status ${res.status}`)
+    return res.json()
+}  
+/* ------------------------------------------------------------
    Init
    ------------------------------------------------------------ */
 
