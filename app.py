@@ -141,7 +141,8 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
         )
 
     try:
-        gdf = gpd.read_file(SHAPEFILE_PATH)
+        gdf = json.loads(Path(SHAPEFILE_PATH).read_text(encoding="utf-8"))
+        features = gdf["features"]
     except Exception as e:
         raise HTTPException(
             status_code=500,
