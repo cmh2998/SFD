@@ -1389,89 +1389,533 @@ function toggleRiverLabels() {
     rebuildRiverLabels()
 }
 function exportSitrepPdf() {
-    const rows = latestLevelRows.slice().sort((a, b) => {
-        const sa = a.item.state === "High" ? 3 : a.item.state === "Elevated" ? 2 : a.item.state === "Normal" ? 1 : 0
-        const sb = b.item.state === "High" ? 3 : b.item.state === "Elevated" ? 2 : b.item.state === "Normal" ? 1 : 0
-        if (sb !== sa) return sb - sa
-        return (a.item.label || "").localeCompare(b.item.label || "")
+  // Copy and sort for stable output
+  const rows = latestLevelRows.slice()
+
+  // Simple severity weights using existing state and freshness only
+  const stateWeight = (s) => (s === "High" ? 3 : s === "Elevated" ? 2 : s === "Normal" ? 1 : 0)
+  const freshnessWeight = (st) => (st === "Live" ? 0 : st === "Delayed" ? 1 : st === "Stale" ? 2 : 3)
+
+  const safeText = (v) => (v === null || v === undefined ? "" : String(v))
+  const esc = (s) =>
+    safeText(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;")
+
+  // Sort rows by severity for prioritised lists
+  const severitySorted = rows
+    .slice()
+    .sort((a, b) => {
+      const sa = stateWeight(a.item.state)
+      const sb = stateWeight(b.item.state)
+      if (sb !== sa) return sb - sa
+
+      const fa = freshnessWeight(a.freshness?.status)
+      const fb = freshnessWeight(b.freshness?.status)
+      if (fb !== fa) return fa - fb
+
+      return (a.item.label || "").localeCompare(b.item.label || "")
     })
 
-    const win = window.open("", "_blank")
-    if (!win) {
-    alert("Popup blocked. Allow popups for this site to open the SITREP.")
-    return
+  // Counts by state
+  const countsByState = { High: 0, Elevated: 0, Normal: 0, "No data": 0 }
+  rows.forEach((r) => {
+    const st = r.item.state || "No data"
+    if (countsByState[st] === undefined) countsByState["No data"] += 1
+    else countsByState[st] += 1
+  })
+
+  // Freshness overview
+  const countsByFreshness = { Live: 0, Delayed: 0, Stale: 0, Offline: 0, Unknown: 0 }
+  rows.forEach((r) => {
+    const fs = r.freshness?.status || "Unknown"
+    if (countsByFreshness[fs] === undefined) countsByFreshness.Unknown += 1
+    else countsByFreshness[fs] += 1
+  })
+
+  // Data quality notes
+  const offlineCount = countsByFreshness.Offline || 0
+  const noDataCount = countsByState["No data"] || 0
+  const staleOrDelayedCount = (countsByFreshness.Stale || 0) + (countsByFreshness.Delayed || 0)
+
+  // Worst station summary (top item in severity list)
+  const worstRow = severitySorted[0]
+  const worstName = worstRow ? worstRow.item.label || worstRow.item.id || "" : ""
+  const worstState = worstRow ? worstRow.item.state || "No data" : ""
+  const worstFresh = worstRow ? worstRow.freshness?.status || "Unknown" : ""
+  const worstTime = worstRow ? formatDateTime(worstRow.item.dateTime) || "" : ""
+  const worstRiver = worstRow ? worstRow.item.riverName || "" : ""
+
+  // Top stations by severity (approx top 10)
+  const topStations = severitySorted.slice(0, 10)
+
+  // Highest rising sites, using existing trend field only
+  const risingSites = severitySorted
+    .filter((r) => {
+      const t = (r.item.trend || "").toLowerCase()
+      return t.includes("rising") || t.includes("up") || t.includes("increasing")
+    })
+    .slice(0, 10)
+
+  // River overview using existing fields only
+  const riverMap = new Map()
+  rows.forEach((r) => {
+    const river = r.item.riverName || "Unknown river"
+    const current = riverMap.get(river) || { river, total: 0, worst: "No data", high: 0, elevated: 0, normal: 0, nodata: 0 }
+    current.total += 1
+    const st = r.item.state || "No data"
+    if (st === "High") current.high += 1
+    else if (st === "Elevated") current.elevated += 1
+    else if (st === "Normal") current.normal += 1
+    else current.nodata += 1
+
+    // Track worst state on that river
+    if (stateWeight(st) > stateWeight(current.worst)) current.worst = st
+    riverMap.set(river, current)
+  })
+
+  const rivers = Array.from(riverMap.values()).sort((a, b) => {
+    const wa = stateWeight(a.worst)
+    const wb = stateWeight(b.worst)
+    if (wb !== wa) return wb - wa
+    return a.river.localeCompare(b.river)
+  })
+
+  // Existing hotspots are already computed by dashboard logic, reuse safely
+  const hotspots = Array.isArray(latestHotspots) ? latestHotspots : []
+
+  // Optional flood warnings summary, only if already present in memory
+  // Supported shapes:
+  // - latestFloodWarnings = { alerts: n, warnings: n, severe: n }
+  // - latestFloodWarnings = { FloodAlert: n, FloodWarning: n, SevereFloodWarning: n }
+  // - latestFloodWarnings = [{ type: "Flood Alert" }, ...]
+  const floodWarningsSummary = (() => {
+    const fw = window.latestFloodWarnings
+    if (!fw) return null
+
+    const normalised = { alerts: 0, warnings: 0, severe: 0 }
+
+    if (Array.isArray(fw)) {
+      fw.forEach((x) => {
+        const t = (x?.type || x?.warningType || "").toLowerCase()
+        if (t.includes("severe")) normalised.severe += 1
+        else if (t.includes("warning")) normalised.warnings += 1
+        else if (t.includes("alert")) normalised.alerts += 1
+      })
+      return normalised
     }
 
-    win.document.write(`
+    if (typeof fw === "object") {
+      normalised.alerts = Number(fw.alerts ?? fw.FloodAlert ?? fw.floodAlert ?? 0) || 0
+      normalised.warnings = Number(fw.warnings ?? fw.FloodWarning ?? fw.floodWarning ?? 0) || 0
+      normalised.severe = Number(fw.severe ?? fw.SevereFloodWarning ?? fw.severeFloodWarning ?? 0) || 0
+
+      // Only show if it looks meaningful
+      if (normalised.alerts + normalised.warnings + normalised.severe === 0) return null
+      return normalised
+    }
+
+    return null
+  })()
+
+  // Existing stations table output, but keep clean and printable
+  const tableRows = rows
+    .slice()
+    .sort((a, b) => {
+      const sa = stateWeight(a.item.state)
+      const sb = stateWeight(b.item.state)
+      if (sb !== sa) return sb - sa
+      return (a.item.label || "").localeCompare(b.item.label || "")
+    })
+    .map((r) => {
+      const it = r.item
+      const fr = r.freshness
+      const cls = (it.state || "No data").toLowerCase().replaceAll(" ", "-")
+      const v = formatValueAndUnit(it).text
+      return `<tr class="${cls}">
+<td>${esc(it.label || it.id || "")}</td>
+<td>${esc(it.riverName || "")}</td>
+<td>${esc(v)}</td>
+<td>${esc(it.trend || "")}</td>
+<td>${esc(it.state || "No data")}</td>
+<td>${esc(fr?.status || "")}</td>
+<td>${esc(formatDateTime(it.dateTime) || "")}</td>
+</tr>`
+    })
+    .join("")
+
+  const win = window.open("", "_blank")
+  if (!win) {
+    alert("Popup blocked. Allow popups for this site to open the SITREP.")
+    return
+  }
+
+  const generatedAt = new Date().toLocaleString()
+  const lastRefresh = lastRefreshLocal || "Unknown"
+
+  win.document.write(`
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>Staffordshire Flood SITREP</title>
 <style>
-body{font-family:Arial,Helvetica,sans-serif;margin:24px}
-h1{margin-bottom:4px}
-.meta{color:#555;margin-bottom:16px}
-table{border-collapse:collapse;width:100%;font-size:12px}
-th,td{border:1px solid #ccc;padding:6px;text-align:left}
-th{background:#f2f2f2}
-.high{background:#ffd6d6}
-.elevated{background:#fff0c7}
-.normal{background:#e7f7e7}
+  body{font-family:Arial,Helvetica,sans-serif;margin:22px;color:#111}
+  .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+  .title{font-size:22px;font-weight:700;letter-spacing:0.2px;margin:0 0 6px 0}
+  .meta{font-size:12px;color:#444;line-height:1.35}
+  .logo{height:64px;object-fit:contain}
+
+  .section{margin-top:14px;border:1px solid #d6d6d6}
+  .section-h{padding:10px 12px;color:#fff;font-weight:700;font-size:14px}
+  .section-c{padding:12px}
+
+  .h-red{background:#c9091c}
+  .h-green{background:#39a93a}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{border:1px solid #dcdcdc;border-radius:6px;padding:10px}
+  .card h3{margin:0 0 8px 0;font-size:13px}
+  .small{font-size:12px;color:#333}
+  .muted{color:#555}
+  .kpi{display:flex;gap:10px;flex-wrap:wrap}
+  .kpi .pill{border:1px solid #d0d0d0;border-radius:999px;padding:6px 10px;font-size:12px;background:#fafafa}
+  .pill b{font-weight:700}
+  .pill-high{border-color:#c9091c;background:#fff4f4}
+  .pill-elev{border-color:#c58b00;background:#fff8e6}
+  .pill-norm{border-color:#2b7a2c;background:#f0fbf0}
+  .pill-data{border-color:#666;background:#f6f6f6}
+
+  table{border-collapse:collapse;width:100%;font-size:12px}
+  th,td{border:1px solid #cfcfcf;padding:6px;vertical-align:top}
+  th{background:#f2f2f2;text-align:left}
+  .tight td{padding:5px}
+
+  tr.high{background:#ffd6d6}
+  tr.elevated{background:#fff0c7}
+  tr.normal{background:#e7f7e7}
+  tr.no-data{background:#f2f2f2}
+
+  .list{margin:0;padding-left:16px;font-size:12px}
+  .list li{margin:4px 0}
+  .badge{display:inline-block;border:1px solid #d0d0d0;border-radius:4px;padding:2px 6px;font-size:11px;background:#fafafa;margin-left:6px}
+  .badge-high{border-color:#c9091c;background:#fff4f4}
+  .badge-elev{border-color:#c58b00;background:#fff8e6}
+  .badge-norm{border-color:#2b7a2c;background:#f0fbf0}
+  .badge-data{border-color:#666;background:#f6f6f6}
+
+  .divider{height:1px;background:#e2e2e2;margin:10px 0}
+
+  @media print{
+    body{margin:14px}
+    .section{break-inside:avoid}
+    table{page-break-inside:auto}
+    tr{page-break-inside:avoid;page-break-after:auto}
+    .card{break-inside:avoid}
+  }
 </style>
 </head>
 <body>
 
-<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px">
+<div class="topbar">
   <div>
-    <h1 style="margin:0 0 4px 0">Staffordshire Flood SITREP</h1>
+    <div class="title">Staffordshire Flood SITREP</div>
     <div class="meta">
-      Generated: ${new Date().toLocaleString()}<br>
-      Last refresh: ${lastRefreshLocal || "Unknown"}
+      Generated: ${esc(generatedAt)}<br>
+      Last refresh: ${esc(lastRefresh)}
     </div>
   </div>
-  <img src="/CCU.png" alt="CCU" style="height:60px;object-fit:contain">
+  <img src="/CCU.png" alt="CCU" class="logo">
 </div>
 
-<h2>Hotspots</h2>
-${latestHotspots && latestHotspots.length
-    ? latestHotspots.map((h,i)=>`<div>${i+1}. ${h.worst} (${h.count} sites)</div>`).join("")
-    : "<div>None</div>"}
+<div class="section">
+  <div class="section-h h-red">1. Gather Information and Intelligence</div>
+  <div class="section-c">
 
-<h2>Stations</h2>
-<table>
-<tr>
-<th>Station</th>
-<th>River</th>
-<th>Level</th>
-<th>Trend</th>
-<th>Status</th>
-<th>Reporting</th>
-<th>Time</th>
-</tr>
+    <div class="grid">
+      <div class="card">
+        <h3>General operational intelligence summary</h3>
+        <div class="small">
+          This section provides a factual snapshot of observed river level states and reporting status derived from live dashboard feeds.
+        </div>
+        <div class="divider"></div>
+        <div class="small">
+          <b>Worst station currently:</b> ${esc(worstName)}
+          <span class="badge ${worstState === "High" ? "badge-high" : worstState === "Elevated" ? "badge-elev" : worstState === "Normal" ? "badge-norm" : "badge-data"}">${esc(worstState)}</span>
+          <span class="badge">${esc(worstFresh)}</span><br>
+          <span class="muted">River:</span> ${esc(worstRiver || "Unknown")}<br>
+          <span class="muted">Last reported:</span> ${esc(worstTime || "Unknown")}
+        </div>
+      </div>
 
-${rows.map(r=>{
-    const it=r.item
-    const fr=r.freshness
-    const cls = (it.state||"").toLowerCase()
-    const v=formatValueAndUnit(it).text
-    return `<tr class="${cls}">
-<td>${it.label||it.id||""}</td>
-<td>${it.riverName||""}</td>
-<td>${v}</td>
-<td>${it.trend||""}</td>
-<td>${it.state||""}</td>
-<td>${fr.status||""}</td>
-<td>${formatDateTime(it.dateTime)||""}</td>
-</tr>`
-}).join("")}
+      <div class="card">
+        <h3>Site counts by state</h3>
+        <div class="kpi">
+          <div class="pill pill-high"><b>High</b> ${countsByState.High}</div>
+          <div class="pill pill-elev"><b>Elevated</b> ${countsByState.Elevated}</div>
+          <div class="pill pill-norm"><b>Normal</b> ${countsByState.Normal}</div>
+          <div class="pill pill-data"><b>No data</b> ${countsByState["No data"]}</div>
+        </div>
 
-</table>
+        <div class="divider"></div>
+
+        <h3 style="margin-top:0">Reading freshness overview</h3>
+        <div class="kpi">
+          <div class="pill"><b>Live</b> ${countsByFreshness.Live}</div>
+          <div class="pill"><b>Delayed</b> ${countsByFreshness.Delayed}</div>
+          <div class="pill"><b>Stale</b> ${countsByFreshness.Stale}</div>
+          <div class="pill"><b>Offline</b> ${countsByFreshness.Offline}</div>
+          ${countsByFreshness.Unknown ? `<div class="pill"><b>Unknown</b> ${countsByFreshness.Unknown}</div>` : ""}
+        </div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div class="card">
+        <h3>Top stations by severity (approx top 10)</h3>
+        ${
+          topStations.length
+            ? `<table class="tight">
+                <tr>
+                  <th>Station</th>
+                  <th>River</th>
+                  <th>Status</th>
+                  <th>Reporting</th>
+                  <th>Time</th>
+                </tr>
+                ${topStations
+                  .map((r) => {
+                    const it = r.item
+                    const st = it.state || "No data"
+                    const badge =
+                      st === "High" ? "badge-high" : st === "Elevated" ? "badge-elev" : st === "Normal" ? "badge-norm" : "badge-data"
+                    return `<tr>
+                      <td>${esc(it.label || it.id || "")}</td>
+                      <td>${esc(it.riverName || "")}</td>
+                      <td><span class="badge ${badge}">${esc(st)}</span></td>
+                      <td>${esc(r.freshness?.status || "")}</td>
+                      <td>${esc(formatDateTime(it.dateTime) || "")}</td>
+                    </tr>`
+                  })
+                  .join("")}
+              </table>`
+            : `<div class="small">No station data available.</div>`
+        }
+      </div>
+
+      <div class="card">
+        <h3>River levels and their status</h3>
+        ${
+          rivers.length
+            ? `<table class="tight">
+                <tr>
+                  <th>River</th>
+                  <th>Worst</th>
+                  <th>High</th>
+                  <th>Elevated</th>
+                  <th>Normal</th>
+                  <th>No data</th>
+                  <th>Total</th>
+                </tr>
+                ${rivers
+                  .slice(0, 12)
+                  .map((rv) => {
+                    const st = rv.worst || "No data"
+                    const badge =
+                      st === "High" ? "badge-high" : st === "Elevated" ? "badge-elev" : st === "Normal" ? "badge-norm" : "badge-data"
+                    return `<tr>
+                      <td>${esc(rv.river)}</td>
+                      <td><span class="badge ${badge}">${esc(st)}</span></td>
+                      <td>${rv.high}</td>
+                      <td>${rv.elevated}</td>
+                      <td>${rv.normal}</td>
+                      <td>${rv.nodata}</td>
+                      <td>${rv.total}</td>
+                    </tr>`
+                  })
+                  .join("")}
+              </table>
+              <div class="small muted" style="margin-top:6px">Showing up to 12 rivers by worst status.</div>`
+            : `<div class="small">No river grouping available.</div>`
+        }
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div class="card">
+        <h3>Worst station summary</h3>
+        <div class="small">
+          <b>Station:</b> ${esc(worstName)}<br>
+          <b>River:</b> ${esc(worstRiver || "Unknown")}<br>
+          <b>Status:</b> ${esc(worstState)}<br>
+          <b>Reporting:</b> ${esc(worstFresh)}<br>
+          <b>Time:</b> ${esc(worstTime || "Unknown")}
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Data quality notes</h3>
+        <ul class="list">
+          <li>Offline sites: <b>${offlineCount}</b></li>
+          <li>Sites with no data/state: <b>${noDataCount}</b></li>
+          <li>Delayed or stale readings: <b>${staleOrDelayedCount}</b></li>
+        </ul>
+        <div class="small muted" style="margin-top:6px">
+          Notes are generated from current dashboard reading states and freshness flags.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-h h-green">2. Assess threats and risks and develop a working strategy</div>
+  <div class="section-c">
+
+    <div class="grid">
+      <div class="card">
+        <h3>Areas for concern (top ranked stations)</h3>
+        ${
+          topStations.length
+            ? `<ol class="list">
+                ${topStations
+                  .slice(0, 8)
+                  .map((r) => {
+                    const it = r.item
+                    const st = it.state || "No data"
+                    const badge =
+                      st === "High" ? "badge-high" : st === "Elevated" ? "badge-elev" : st === "Normal" ? "badge-norm" : "badge-data"
+                    return `<li>
+                      ${esc(it.label || it.id || "")}
+                      <span class="badge ${badge}">${esc(st)}</span>
+                      ${it.riverName ? `<span class="badge">${esc(it.riverName)}</span>` : ""}
+                      ${r.freshness?.status ? `<span class="badge">${esc(r.freshness.status)}</span>` : ""}
+                    </li>`
+                  })
+                  .join("")}
+              </ol>`
+            : `<div class="small">No prioritised stations available.</div>`
+        }
+        <div class="small muted" style="margin-top:6px">
+          Ranked using current station state and reporting freshness only.
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Highest rising sites</h3>
+        ${
+          risingSites.length
+            ? `<ol class="list">
+                ${risingSites
+                  .map((r) => {
+                    const it = r.item
+                    const st = it.state || "No data"
+                    const badge =
+                      st === "High" ? "badge-high" : st === "Elevated" ? "badge-elev" : st === "Normal" ? "badge-norm" : "badge-data"
+                    return `<li>
+                      ${esc(it.label || it.id || "")}
+                      <span class="badge ${badge}">${esc(st)}</span>
+                      ${esc(it.trend || "") ? `<span class="badge">${esc(it.trend)}</span>` : ""}
+                      ${it.riverName ? `<span class="badge">${esc(it.riverName)}</span>` : ""}
+                    </li>`
+                  })
+                  .join("")}
+              </ol>`
+            : `<div class="small">No rising trend indicators available.</div>`
+        }
+        <div class="small muted" style="margin-top:6px">
+          Uses existing trend text already shown in the dashboard table.
+        </div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div class="card">
+        <h3>Clusters or hotspots of concern</h3>
+        ${
+          hotspots && hotspots.length
+            ? `<table class="tight">
+                <tr>
+                  <th>Rank</th>
+                  <th>Hotspot</th>
+                  <th>Sites</th>
+                </tr>
+                ${hotspots
+                  .slice(0, 10)
+                  .map((h, i) => {
+                    return `<tr>
+                      <td>${i + 1}</td>
+                      <td>${esc(h.worst || "")}</td>
+                      <td>${esc(h.count || "")}</td>
+                    </tr>`
+                  })
+                  .join("")}
+              </table>`
+            : `<div class="small">None identified by current dashboard logic.</div>`
+        }
+        <div class="small muted" style="margin-top:6px">
+          Hotspots are taken directly from the dashboard hotspot list.
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Other prioritisation indicators</h3>
+        <ul class="list">
+          <li>Focus on stations in <b>High</b> and <b>Elevated</b> states that are <b>Delayed</b>, <b>Stale</b>, or <b>Offline</b>.</li>
+          <li>Use hotspot clusters to confirm whether issues are isolated or geographically concentrated.</li>
+          <li>Where reporting is degraded, consider corroboration through local observation and partner reports.</li>
+        </ul>
+        <div class="small muted" style="margin-top:6px">
+          This guidance is static wording only. It does not introduce new dashboard logic.
+        </div>
+      </div>
+    </div>
+
+    ${
+      floodWarningsSummary
+        ? `<div class="card" style="margin-top:12px">
+            <h3>Flood warnings summary</h3>
+            <div class="kpi">
+              <div class="pill"><b>Flood Alerts</b> ${floodWarningsSummary.alerts}</div>
+              <div class="pill"><b>Flood Warnings</b> ${floodWarningsSummary.warnings}</div>
+              <div class="pill"><b>Severe Flood Warnings</b> ${floodWarningsSummary.severe}</div>
+            </div>
+            <div class="small muted" style="margin-top:6px">
+              Shown only when flood warning data is already available in memory.
+            </div>
+          </div>`
+        : ""
+    }
+
+  </div>
+</div>
+
+<div class="section" style="margin-top:14px">
+  <div class="section-h" style="background:#2b2b2b">Stations (full list)</div>
+  <div class="section-c">
+    <table>
+      <tr>
+        <th>Station</th>
+        <th>River</th>
+        <th>Level</th>
+        <th>Trend</th>
+        <th>Status</th>
+        <th>Reporting</th>
+        <th>Time</th>
+      </tr>
+      ${tableRows}
+    </table>
+  </div>
+</div>
 
 </body>
 </html>
 `)
-    win.document.close()
+  win.document.close()
 }
 /* ------------------------------------------------------------
    Modal + buttons
