@@ -380,7 +380,36 @@ let riverLabelsOn = false
 let markerMode = "all"
 
 let pulseMarkers = {}
+function applyMarkerMode() {
+    const want = markerMode || "all"
 
+    Object.keys(markers).forEach(id => {
+        const m = markers[id]
+        const item = latestItemsById[id]
+
+        // If we do not have status for this marker yet, leave it visible
+        if (!item) {
+            if (!map.hasLayer(m)) m.addTo(map)
+            return
+        }
+
+        const p = (item.parameter || "").toLowerCase()
+        const u = (item.unitShort || "").toLowerCase()
+
+        const isLevel = p === "level" || u === "m"
+        const isRain = p === "rainfall" || u === "mm"
+
+        let show = true
+        if (want === "level") show = isLevel
+        if (want === "rainfall") show = isRain
+
+        if (show) {
+            if (!map.hasLayer(m)) m.addTo(map)
+        } else {
+            if (map.hasLayer(m)) map.removeLayer(m)
+        }
+    })
+}
 function nowMs() { return Date.now() }
 
 function parseIsoMs(iso) {
@@ -1560,6 +1589,7 @@ async function refreshStatusAll() {
     if (riverLabelsOn) {
         rebuildRiverLabels()
     }
+    applyMarkerMode()
 }
 /* ------------------------------------------------------------
    Init
