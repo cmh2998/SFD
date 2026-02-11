@@ -1720,7 +1720,7 @@ async function exportSitrepPdf() {
       <h3>Operational picture</h3>
       <div class="small">${esc(operationalPicture)}</div>
 ${
-  (window.latestFloodWarnings || {})
+  window.latestFloodWarnings
     ? `<div class="divider"></div>
        <h3>Flood warnings for Staffordshire</h3>
 
