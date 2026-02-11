@@ -10,15 +10,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import os
 
-from shapely.geometry import Point, MultiPoint, shape, mapping
+import geopandas as gpd
+from shapely.geometry import Point, MultiPoint
 from shapely.prepared import prep
-from shapely.ops import transform as shp_transform
-from pyproj import Transformer
-
 
 app = FastAPI()
+
 BASE_DIR = Path(__file__).resolve().parent
-BOUNDARY_PATH = BASE_DIR / "county_region.GeoJSON"
+
+# Use the shapefile set that already works locally
+SHAPEFILE_PATH = BASE_DIR / "county_region.shp"
 
 # Optional, but useful on some setups
 os.environ["SHAPE_RESTORE_SHX"] = "YES"
@@ -26,13 +27,7 @@ os.environ["SHAPE_RESTORE_SHX"] = "YES"
 # ----------------------------
 # Simple in-memory cache
 # ----------------------------
-_AREA_CACHE = {
-    "ts": 0.0,
-    "poly": None,       # shapely geometry in EPSG:4326
-    "bbox": None,       # dict in EPSG:4326
-    "includes": None,   # list of included names
-    "prepared": None,   # prepared geometry in EPSG:4326
-}
+_AREA_CACHE = {"ts": 0.0, "poly": None, "bbox": None, "name_col": None, "includes": None}
 _AREA_TTL_SECONDS = 3600  # 1 hour
 
 _STATIONS_CACHE = {"ts": 0.0, "data": None}
@@ -44,13 +39,43 @@ _MEASURES_TTL_SECONDS = 300  # 5 minutes
 _STATION_META_CACHE = {}  # station_id -> {"ts": float, "meta": dict}
 _STATION_META_TTL_SECONDS = 3600  # 1 hour
 
+# District polygons cache (not currently exposed, but kept for future)
+_DISTRICTS_CACHE = {"ts": 0.0, "gdf": None, "name_col": None, "prepared": None}
+_DISTRICTS_TTL_SECONDS = 3600  # 1 hour
+
+# Catchment convex hulls
 _CATCHMENTS_CACHE = {"ts": 0.0, "geojson": None}
 _CATCHMENTS_TTL_SECONDS = 3600  # 1 hour
 
+# EA flood warnings polygons (no key)
 _FLOODWARN_CACHE = {"ts": 0.0, "geojson": None}
 _FLOODWARN_TTL_SECONDS = 300  # 5 minutes
 
 OFFLINE_AFTER_HOURS = 6
+
+
+def _find_name_column(gdf):
+    preferred = [
+        "LAD17NM",
+        "LAD22NM",
+        "LAD21NM",
+        "LAD20NM",
+        "LAD19NM",
+        "LAD18NM",
+        "NAME",
+        "Name",
+        "name",
+    ]
+    for c in preferred:
+        if c in gdf.columns:
+            return c
+
+    for c in gdf.columns:
+        cl = c.lower()
+        if "name" in cl or c.upper().endswith("NM"):
+            return c
+
+    return None
 
 
 def _parse_dt(dt_str):
@@ -90,65 +115,29 @@ def _normalise_unit_to_short(unit):
     return token or None
 
 
-def _detect_epsg_from_geojson(gj: dict) -> int:
+def _load_shapefile_wgs84():
     """
-    Tries to detect EPSG from GeoJSON "crs".
-    Defaults to EPSG:27700 for UK boundary datasets like yours.
+    Loads the shapefile and ensures it is in EPSG:4326.
+    Works whether the source CRS is in the .prj or needs setting.
     """
     try:
-        crs = gj.get("crs") or {}
-        props = crs.get("properties") or {}
-        name = props.get("name") or ""
-        name = str(name)
+        gdf = gpd.read_file(SHAPEFILE_PATH)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read shapefile at {SHAPEFILE_PATH}: {e}")
 
-        # Example: "urn:ogc:def:crs:EPSG::27700"
-        m = re.search(r"EPSG::(\d+)", name)
-        if m:
-            return int(m.group(1))
-
-        # Example: "EPSG:27700"
-        m2 = re.search(r"EPSG:(\d+)", name)
-        if m2:
-            return int(m2.group(1))
+    # If CRS is missing, assume British National Grid (common for UK admin boundaries)
+    try:
+        if gdf.crs is None:
+            gdf = gdf.set_crs(epsg=27700)
     except Exception:
         pass
 
-    return 27700
-
-
-def _to_wgs84_geom(geom_dict: dict, source_epsg: int):
-    """
-    Convert geometry dict to shapely in EPSG:4326.
-    """
-    g = shape(geom_dict)
-
-    if source_epsg == 4326:
-        return g
-
-    transformer = Transformer.from_crs(f"EPSG:{source_epsg}", "EPSG:4326", always_xy=True)
-
-    def _proj(x, y, z=None):
-        return transformer.transform(x, y)
-
-    return shp_transform(_proj, g)
-
-
-def _read_boundary_geojson():
     try:
-        raw = BOUNDARY_PATH.read_text(encoding="utf-8")
-        return json.loads(raw)
+        gdf = gdf.to_crs(epsg=4326)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read boundary GeoJSON at {BOUNDARY_PATH}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reproject shapefile to EPSG:4326: {e}")
 
-
-def _pick_name(props: dict) -> str:
-    for k in ["LAD17NM", "LAD22NM", "LAD21NM", "LAD20NM", "LAD19NM", "LAD18NM", "NAME", "Name", "name"]:
-        v = props.get(k)
-        if v is not None:
-            s = str(v).strip()
-            if s:
-                return s
-    return ""
+    return gdf
 
 
 def _load_staffs_plus_stoke_polygon_and_bbox():
@@ -158,96 +147,62 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
         and _AREA_CACHE["bbox"] is not None
         and (now - _AREA_CACHE["ts"]) < _AREA_TTL_SECONDS
     ):
-        return _AREA_CACHE["poly"], _AREA_CACHE["bbox"], _AREA_CACHE["includes"], _AREA_CACHE["prepared"]
+        return _AREA_CACHE["poly"], _AREA_CACHE["bbox"], _AREA_CACHE["name_col"], _AREA_CACHE["includes"]
 
-    gj = _read_boundary_geojson()
-    source_epsg = _detect_epsg_from_geojson(gj)
+    gdf = _load_shapefile_wgs84()
 
-    features = gj.get("features") or []
-    if not isinstance(features, list):
-        raise HTTPException(status_code=500, detail="Boundary GeoJSON features is not a list")
+    name_col = _find_name_column(gdf)
+    if not name_col:
+        raise HTTPException(status_code=500, detail=f"No name column found. Columns: {list(gdf.columns)}")
 
-    # Try a robust selection for "Staffordshire area" using LAD names
-    # Many datasets do not contain a single feature called "Staffordshire".
+    # Robust selection for Staffordshire area using LAD names.
+    # Many datasets will not contain a single record called "Staffordshire".
     include_terms = [
-        "stoke",        # Stoke-on-Trent
-        "stafford",     # Stafford, Staffordshire Moorlands, etc.
+        "stoke",
+        "stafford",
         "tamworth",
         "lichfield",
         "cannock",
-        "newcastle",    # Newcastle-under-Lyme
+        "newcastle",  # Newcastle-under-Lyme
+        "under-lyme",
         "east staffordshire",
         "south staffordshire",
         "moorlands",
-        "under-lyme",
     ]
 
-    kept_geoms = []
-    kept_names = []
+    mask = None
+    series = gdf[name_col].astype(str)
+    for t in include_terms:
+        m = series.str.contains(t, case=False, na=False)
+        mask = m if mask is None else (mask | m)
 
-    for f in features:
-        if not isinstance(f, dict):
-            continue
-        props = f.get("properties") or {}
-        nm = _pick_name(props)
-        if not nm:
-            continue
+    area = gdf[mask] if mask is not None else gdf.iloc[0:0]
 
-        low = nm.lower()
-        if any(t in low for t in include_terms):
-            geom_dict = f.get("geometry")
-            if not geom_dict:
-                continue
-            try:
-                g4326 = _to_wgs84_geom(geom_dict, source_epsg)
-                kept_geoms.append(g4326)
-                kept_names.append(nm)
-            except Exception:
-                continue
+    # If we still got nothing, fall back to union of everything (better than breaking)
+    if area.empty:
+        area = gdf
 
-    # If we still found nothing, fall back to union of all features
-    if not kept_geoms:
-        for f in features:
-            if not isinstance(f, dict):
-                continue
-            geom_dict = f.get("geometry")
-            if not geom_dict:
-                continue
-            try:
-                g4326 = _to_wgs84_geom(geom_dict, source_epsg)
-                kept_geoms.append(g4326)
-                props = f.get("properties") or {}
-                kept_names.append(_pick_name(props) or "Unknown")
-            except Exception:
-                continue
+    area_poly = area.unary_union
 
-    if not kept_geoms:
-        raise HTTPException(
-            status_code=404,
-            detail="Boundary GeoJSON contained no usable geometries",
-        )
-
-    area_poly = kept_geoms[0]
-    for g in kept_geoms[1:]:
-        area_poly = area_poly.union(g)
-
+    # Fix invalid geometries that can crash within/contains
     try:
         if hasattr(area_poly, "is_valid") and not area_poly.is_valid:
             area_poly = area_poly.buffer(0)
     except Exception:
         pass
 
-    minx, miny, maxx, maxy = area_poly.bounds
+    minx, miny, maxx, maxy = area.total_bounds
     bbox = {"minLon": float(minx), "minLat": float(miny), "maxLon": float(maxx), "maxLat": float(maxy)}
-    includes = sorted(list({n for n in kept_names if n}))
+
+    includes = sorted(list({str(v) for v in area[name_col].dropna().unique()}))
 
     _AREA_CACHE["ts"] = now
     _AREA_CACHE["poly"] = area_poly
     _AREA_CACHE["bbox"] = bbox
+    _AREA_CACHE["name_col"] = name_col
     _AREA_CACHE["includes"] = includes
-    _AREA_CACHE["prepared"] = prep(area_poly)
 
-    return area_poly, bbox, includes, _AREA_CACHE["prepared"]
+    return area_poly, bbox, name_col, includes
 
 
 def _get_station_measures(station_id):
@@ -346,6 +301,10 @@ def _state_for_measure(parameter, unit_short, value):
 
 
 def _compute_trend_for_measure(measure_id):
+    """
+    Returns (trend, diff, rate_per_hour) where possible, else (NoData, None, None)
+    Uses last 2 hours of readings.
+    """
     try:
         since_dt = datetime.now(timezone.utc) - timedelta(hours=2)
         since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -415,11 +374,14 @@ def _build_catchments_geojson():
         if hull.is_empty:
             continue
 
+        g = gpd.GeoSeries([hull], crs="EPSG:4326")
+        geom_json = json.loads(g.to_json())["features"][0]["geometry"]
+
         features.append(
             {
                 "type": "Feature",
                 "properties": {"catchmentName": cn, "stationCount": len(pts)},
-                "geometry": mapping(hull),
+                "geometry": geom_json,
             }
         )
 
@@ -544,6 +506,7 @@ def _fetch_station_row(st):
 
     unit = latest.get("unitName") or best.get("unitName")
     unit_short = _normalise_unit_to_short(unit)
+
     parameter = best.get("parameter")
 
     row["measureId"] = measure_id
@@ -577,7 +540,7 @@ def _fetch_station_row(st):
 
 
 # ----------------------------
-# Existing endpoints
+# Endpoints
 # ----------------------------
 @app.get("/health")
 def health():
@@ -586,8 +549,8 @@ def health():
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    with open("templates/index.html", encoding="utf-8") as f:
-        return f.read()
+    p = BASE_DIR / "templates" / "index.html"
+    return p.read_text(encoding="utf-8")
 
 
 @app.get("/station/{station_id}")
@@ -605,17 +568,15 @@ def station_reading(station_id: str):
     return {"station": station_id, "dateTime": item.get("dateTime"), "value": item.get("value"), "unit": item.get("unitName")}
 
 
-# ----------------------------
-# Staffordshire + Stoke endpoints
-# ----------------------------
 @app.get("/staffordshire/bbox")
 def staffordshire_bbox():
-    _, bbox, includes, _ = _load_staffs_plus_stoke_polygon_and_bbox()
+    _, bbox, name_col, includes = _load_staffs_plus_stoke_polygon_and_bbox()
     return {
         "minLon": bbox["minLon"],
         "minLat": bbox["minLat"],
         "maxLon": bbox["maxLon"],
         "maxLat": bbox["maxLat"],
+        "nameColumn": name_col,
         "includes": includes,
     }
 
@@ -623,36 +584,45 @@ def staffordshire_bbox():
 @app.get("/staffordshire/boundary")
 def staffordshire_boundary():
     """
-    Returns a WGS84 (EPSG:4326) GeoJSON so Leaflet can draw it.
+    Returns the selected Staffordshire+Stoke area as GeoJSON in EPSG:4326.
+    Leaflet expects lon/lat degrees.
     """
-    gj = _read_boundary_geojson()
-    source_epsg = _detect_epsg_from_geojson(gj)
+    try:
+        gdf = _load_shapefile_wgs84()
+        name_col = _find_name_column(gdf)
 
-    out_features = []
-    for f in gj.get("features") or []:
-        if not isinstance(f, dict):
-            continue
-        geom_dict = f.get("geometry")
-        if not geom_dict:
-            continue
+        if name_col:
+            include_terms = [
+                "stoke",
+                "stafford",
+                "tamworth",
+                "lichfield",
+                "cannock",
+                "newcastle",
+                "under-lyme",
+                "east staffordshire",
+                "south staffordshire",
+                "moorlands",
+            ]
+            mask = None
+            series = gdf[name_col].astype(str)
+            for t in include_terms:
+                m = series.str.contains(t, case=False, na=False)
+                mask = m if mask is None else (mask | m)
+            area = gdf[mask] if mask is not None else gdf
+            if area.empty:
+                area = gdf
+        else:
+            area = gdf
 
-        try:
-            g4326 = _to_wgs84_geom(geom_dict, source_epsg)
-            out_features.append(
-                {
-                    "type": "Feature",
-                    "properties": f.get("properties") or {},
-                    "geometry": mapping(g4326),
-                }
-            )
-        except Exception:
-            continue
-
-    return {"type": "FeatureCollection", "features": out_features}
+        return json.loads(area.to_json())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"/staffordshire/boundary failed: {e}")
 
 
 @app.get("/staffordshire/districts")
 def staffordshire_districts():
+    # Disabled for now
     return {"type": "FeatureCollection", "features": []}
 
 
@@ -673,7 +643,7 @@ def staffordshire_stations():
         if _STATIONS_CACHE["data"] is not None and (now - _STATIONS_CACHE["ts"]) < _STATIONS_TTL_SECONDS:
             return _STATIONS_CACHE["data"]
 
-        _, bbox, _, prepared_poly = _load_staffs_plus_stoke_polygon_and_bbox()
+        area_poly, bbox, _, _ = _load_staffs_plus_stoke_polygon_and_bbox()
 
         minLon = bbox["minLon"]
         minLat = bbox["minLat"]
@@ -692,27 +662,35 @@ def staffordshire_stations():
 
         items = data.get("items", []) or []
 
-        stations = []
+        rows = []
         for s in items:
             lat = s.get("lat")
             lon = s.get("long")
             if lat is None or lon is None:
                 continue
+            rows.append(
+                {
+                    "id": s.get("stationReference"),
+                    "label": s.get("label"),
+                    "lat": lat,
+                    "long": lon,
+                }
+            )
 
-            try:
-                pt = Point(float(lon), float(lat))
-            except Exception:
-                continue
+        if not rows:
+            out = {"count": 0, "stations": []}
+            _STATIONS_CACHE["ts"] = now
+            _STATIONS_CACHE["data"] = out
+            return out
 
-            if prepared_poly.contains(pt):
-                stations.append(
-                    {
-                        "id": s.get("stationReference"),
-                        "label": s.get("label"),
-                        "lat": lat,
-                        "long": lon,
-                    }
-                )
+        pts = gpd.GeoDataFrame(
+            rows,
+            geometry=gpd.points_from_xy([row["long"] for row in rows], [row["lat"] for row in rows]),
+            crs="EPSG:4326",
+        )
+
+        inside = pts[pts.within(area_poly)]
+        stations = inside.drop(columns=["geometry"]).to_dict(orient="records")
 
         out = {"count": len(stations), "stations": stations}
         _STATIONS_CACHE["ts"] = now
@@ -726,7 +704,7 @@ def staffordshire_stations():
 @app.get("/staffordshire/status")
 def staffordshire_status(offset: int = 0, limit: int = 10):
     stations_payload = staffordshire_stations()
-    stations = stations_payload.get("stations", [])
+    stations = stations_payload.get("stations", []) or []
 
     total = len(stations)
     start = max(0, offset)
@@ -734,8 +712,8 @@ def staffordshire_status(offset: int = 0, limit: int = 10):
     batch = stations[start:end]
 
     items_out = []
-    max_workers = 10
 
+    max_workers = 10
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(_fetch_station_row, st) for st in batch]
         for fut in as_completed(futures):
