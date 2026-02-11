@@ -2134,7 +2134,7 @@ async function refreshStatusAll() {
     offset += PAGE_LIMIT
     }
 
-    refreshFloodWarningsSummary()
+    await refreshFloodWarningsSummary()
     
     latestItemsById = {}
     latestLevelRows = []
