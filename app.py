@@ -1,60 +1,54 @@
 # app.py
-from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import os
+from fastapi import FastAPI, HTTPException
+import requests
+import json
 import time
 import re
-import json
-import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+import os
 
 from shapely.geometry import Point, MultiPoint, shape, mapping
 from shapely.prepared import prep
 from shapely.ops import unary_union
-from pyproj import Transformer
 
 app = FastAPI()
 
 BASE_DIR = Path(__file__).resolve().parent
-BOUNDARY_PATH = BASE_DIR / "county_region.GeoJSON"
-TEMPLATES_INDEX = BASE_DIR / "templates" / "index.html"
 
-# Helpful for some envs, harmless otherwise
-os.environ["SHAPE_RESTORE_SHX"] = "YES"
+# Use this file name in your repo
+BOUNDARY_GEOJSON_PATH = BASE_DIR / "staffordshire_boundary.geojson"
 
 # ----------------------------
-# Caches
+# Simple in-memory cache
 # ----------------------------
-_AREA_CACHE = {
+_BOUNDARY_CACHE = {
     "ts": 0.0,
-    "poly": None,          # shapely geometry in WGS84
-    "bbox": None,          # dict
-    "includes": None,      # list[str]
-    "boundary_geojson": None,  # FeatureCollection in WGS84 for Leaflet
+    "poly": None,
+    "bbox": None,
 }
-_AREA_TTL_SECONDS = 3600
+_BOUNDARY_TTL_SECONDS = 3600  # 1 hour
 
 _STATIONS_CACHE = {"ts": 0.0, "data": None}
-_STATIONS_TTL_SECONDS = 600
+_STATIONS_TTL_SECONDS = 600  # 10 minutes
 
-_MEASURES_CACHE = {}
-_MEASURES_TTL_SECONDS = 300
+_MEASURES_CACHE = {}  # station_id -> {"ts": float, "items": list}
+_MEASURES_TTL_SECONDS = 300  # 5 minutes
 
-_STATION_META_CACHE = {}
-_STATION_META_TTL_SECONDS = 3600
+_STATION_META_CACHE = {}  # station_id -> {"ts": float, "meta": dict}
+_STATION_META_TTL_SECONDS = 3600  # 1 hour
 
+# Catchment convex hulls
 _CATCHMENTS_CACHE = {"ts": 0.0, "geojson": None}
-_CATCHMENTS_TTL_SECONDS = 3600
+_CATCHMENTS_TTL_SECONDS = 3600  # 1 hour
 
+# EA flood warnings polygons
 _FLOODWARN_CACHE = {"ts": 0.0, "geojson": None}
-_FLOODWARN_TTL_SECONDS = 300
+_FLOODWARN_TTL_SECONDS = 300  # 5 minutes
 
 OFFLINE_AFTER_HOURS = 6
-
-# BNG -> WGS84 transformer (EPSG:27700 to EPSG:4326)
-_BNG_TO_WGS84 = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
 
 
 def _parse_dt(dt_str):
@@ -93,155 +87,65 @@ def _normalise_unit_to_short(unit):
     return token or None
 
 
-def _get_prop_name(props):
-    if not isinstance(props, dict):
-        return ""
-    return str(
-        props.get("LAD17NM")
-        or props.get("LAD22NM")
-        or props.get("LAD21NM")
-        or props.get("LAD20NM")
-        or props.get("NAME")
-        or props.get("Name")
-        or props.get("name")
-        or ""
-    ).strip()
-
-
-def _transform_coords_bng_to_wgs84(coords):
-    # Handles nested coordinate arrays for Polygon/MultiPolygon
-    if coords is None:
-        return coords
-
-    if isinstance(coords, (list, tuple)):
-        if len(coords) == 2 and all(isinstance(x, (int, float)) for x in coords):
-            x, y = coords[0], coords[1]
-            lon, lat = _BNG_TO_WGS84.transform(x, y)
-            return [float(lon), float(lat)]
-        return [_transform_coords_bng_to_wgs84(c) for c in coords]
-
-    return coords
-
-
-def _geometry_to_wgs84(geom_obj, crs_name):
-    """
-    If boundary GeoJSON is EPSG:27700, transform to EPSG:4326.
-    If already WGS84 or unknown, assume it is already lon/lat.
-    """
-    if not isinstance(geom_obj, dict):
-        return None
-
-    gtype = geom_obj.get("type")
-    coords = geom_obj.get("coordinates")
-
-    if not gtype or coords is None:
-        return None
-
-    if crs_name and "27700" in crs_name:
-        coords_out = _transform_coords_bng_to_wgs84(coords)
-        return {"type": gtype, "coordinates": coords_out}
-
-    # Assume already WGS84
-    return geom_obj
-
-
-def _load_boundary_geojson_raw():
-    try:
-        return json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read boundary GeoJSON at {BOUNDARY_PATH}: {e}")
-
-
-def _load_staffs_plus_stoke_polygon_and_bbox():
+def _load_boundary_poly_and_bbox():
     now = time.time()
     if (
-        _AREA_CACHE["poly"] is not None
-        and _AREA_CACHE["bbox"] is not None
-        and (now - _AREA_CACHE["ts"]) < _AREA_TTL_SECONDS
+        _BOUNDARY_CACHE["poly"] is not None
+        and _BOUNDARY_CACHE["bbox"] is not None
+        and (now - _BOUNDARY_CACHE["ts"]) < _BOUNDARY_TTL_SECONDS
     ):
-        return _AREA_CACHE["poly"], _AREA_CACHE["bbox"], _AREA_CACHE["includes"], _AREA_CACHE["boundary_geojson"]
+        return _BOUNDARY_CACHE["poly"], _BOUNDARY_CACHE["bbox"]
 
-    raw = _load_boundary_geojson_raw()
-    features = raw.get("features") or []
-
-    if not features:
-        raise HTTPException(status_code=404, detail="Boundary GeoJSON contained no features")
-
-    crs_name = ""
-    crs = raw.get("crs") or {}
-    if isinstance(crs, dict):
-        props = crs.get("properties") or {}
-        crs_name = str(props.get("name") or "")
-
-    wanted = ["staffordshire", "stoke-on-trent", "stoke on trent", "stoke-on trent"]
-    kept = []
-    for f in features:
-        props = f.get("properties") or {}
-        nm = _get_prop_name(props)
-        if not nm:
-            continue
-        low = nm.lower()
-        if any(w in low for w in wanted):
-            kept.append(f)
-
-    # If the file does not contain those names, fallback to using all features
-    use_features = kept if kept else features
+    try:
+        gj = json.loads(BOUNDARY_GEOJSON_PATH.read_text(encoding="utf-8"))
+        feats = gj.get("features", []) or []
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read boundary GeoJSON at {BOUNDARY_GEOJSON_PATH}: {e}",
+        )
 
     geoms = []
-    includes = []
-
-    out_features = []
-    for f in use_features:
-        geom_in = f.get("geometry")
-        if not geom_in:
+    for f in feats:
+        g = f.get("geometry")
+        if not g:
             continue
-
-        geom_wgs = _geometry_to_wgs84(geom_in, crs_name)
-        if not geom_wgs:
-            continue
-
         try:
-            s = shape(geom_wgs)
-            if s.is_empty:
-                continue
-            geoms.append(s)
+            geoms.append(shape(g))
         except Exception:
             continue
-
-        props = f.get("properties") or {}
-        nm = _get_prop_name(props)
-        if nm:
-            includes.append(nm)
-
-        out_features.append({
-            "type": "Feature",
-            "properties": props,
-            "geometry": geom_wgs
-        })
 
     if not geoms:
         raise HTTPException(status_code=404, detail="Boundary GeoJSON contained no usable geometries")
 
-    area_poly = unary_union(geoms)
+    boundary = unary_union(geoms)
 
     try:
-        if hasattr(area_poly, "is_valid") and not area_poly.is_valid:
-            area_poly = area_poly.buffer(0)
+        if hasattr(boundary, "is_valid") and not boundary.is_valid:
+            boundary = boundary.buffer(0)
     except Exception:
         pass
 
-    minx, miny, maxx, maxy = area_poly.bounds
-    bbox = {"minLon": float(minx), "minLat": float(miny), "maxLon": float(maxx), "maxLat": float(maxy)}
+    if boundary.is_empty:
+        raise HTTPException(status_code=404, detail="Boundary geometry was empty")
 
-    boundary_geojson = {"type": "FeatureCollection", "features": out_features}
+    minx, miny, maxx, maxy = boundary.bounds
 
-    _AREA_CACHE["ts"] = now
-    _AREA_CACHE["poly"] = area_poly
-    _AREA_CACHE["bbox"] = bbox
-    _AREA_CACHE["includes"] = sorted(list({n for n in includes if n}))
-    _AREA_CACHE["boundary_geojson"] = boundary_geojson
+    # Sanity check: if the file is still in British National Grid metres, it will look like 300000, 400000, etc
+    # This app expects WGS84 lon, lat for all point checks and the EA API bbox call
+    if abs(minx) > 180 or abs(maxx) > 180 or abs(miny) > 90 or abs(maxy) > 90:
+        raise HTTPException(
+            status_code=500,
+            detail="Boundary GeoJSON does not look like WGS84 lon, lat. Re-export it as EPSG:4326 (WGS84).",
+        )
 
-    return area_poly, bbox, _AREA_CACHE["includes"], boundary_geojson
+    bbox = {"minLon": minx, "minLat": miny, "maxLon": maxx, "maxLat": maxy}
+
+    _BOUNDARY_CACHE["ts"] = now
+    _BOUNDARY_CACHE["poly"] = boundary
+    _BOUNDARY_CACHE["bbox"] = bbox
+
+    return boundary, bbox
 
 
 def _get_station_measures(station_id):
@@ -434,7 +338,6 @@ def _fetch_station_row(st):
 
     unit = latest.get("unitName") or best.get("unitName")
     unit_short = _normalise_unit_to_short(unit)
-
     parameter = best.get("parameter")
 
     row["measureId"] = measure_id
@@ -451,7 +354,11 @@ def _fetch_station_row(st):
     age = (now_dt - best_dt).total_seconds()
     row["ageSeconds"] = int(age)
 
-    row["reporting"] = "Offline" if age > (OFFLINE_AFTER_HOURS * 3600) else "Live"
+    if age > (OFFLINE_AFTER_HOURS * 3600):
+        row["reporting"] = "Offline"
+    else:
+        row["reporting"] = "Live"
+
     row["state"] = _state_for_measure(parameter, unit_short, value)
 
     if measure_id:
@@ -491,11 +398,13 @@ def _build_catchments_geojson():
         if hull.is_empty:
             continue
 
-        features.append({
-            "type": "Feature",
-            "properties": {"catchmentName": cn, "stationCount": len(pts)},
-            "geometry": mapping(hull)
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {"catchmentName": cn, "stationCount": len(pts)},
+                "geometry": mapping(hull),
+            }
+        )
 
     out = {"type": "FeatureCollection", "features": features}
     _CATCHMENTS_CACHE["ts"] = now
@@ -508,7 +417,7 @@ def _build_flood_warnings_geojson():
     if _FLOODWARN_CACHE["geojson"] is not None and (now - _FLOODWARN_CACHE["ts"]) < _FLOODWARN_TTL_SECONDS:
         return _FLOODWARN_CACHE["geojson"]
 
-    _, bbox, _, _ = _load_staffs_plus_stoke_polygon_and_bbox()
+    _, bbox = _load_boundary_poly_and_bbox()
     minLon = bbox["minLon"]
     minLat = bbox["minLat"]
     maxLon = bbox["maxLon"]
@@ -542,18 +451,20 @@ def _build_flood_warnings_geojson():
         if not (isinstance(poly, dict) and poly.get("type") and poly.get("coordinates")):
             continue
 
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "severity": it.get("severity"),
-                "severityLevel": it.get("severityLevel"),
-                "message": it.get("message"),
-                "timeRaised": it.get("timeRaised"),
-                "timeMessageChanged": it.get("timeMessageChanged"),
-                "area": fa.get("label") or fa.get("fwdCode") or "Flood area"
-            },
-            "geometry": poly
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "severity": it.get("severity"),
+                    "severityLevel": it.get("severityLevel"),
+                    "message": it.get("message"),
+                    "timeRaised": it.get("timeRaised"),
+                    "timeMessageChanged": it.get("timeMessageChanged"),
+                    "area": fa.get("label") or fa.get("fwdCode") or "Flood area",
+                },
+                "geometry": poly,
+            }
+        )
 
     out = {"type": "FeatureCollection", "features": features}
     _FLOODWARN_CACHE["ts"] = now
@@ -571,28 +482,48 @@ def health():
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    try:
-        return Path(TEMPLATES_INDEX).read_text(encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read templates/index.html: {e}")
+    with open("templates/index.html") as f:
+        return f.read()
 
 
-@app.get("/staffordshire/bbox")
-def staffordshire_bbox():
-    _, bbox, includes, _ = _load_staffs_plus_stoke_polygon_and_bbox()
+@app.get("/station/{station_id}")
+def station_reading(station_id: str):
+    url = f"https://environment.data.gov.uk/flood-monitoring/id/stations/{station_id}/readings"
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+
+    items = data.get("items", [])
+    if not items:
+        raise HTTPException(status_code=404, detail="No readings found for this station")
+
+    item = items[0]
     return {
-        "minLon": bbox["minLon"],
-        "minLat": bbox["minLat"],
-        "maxLon": bbox["maxLon"],
-        "maxLat": bbox["maxLat"],
-        "includes": includes,
+        "station": station_id,
+        "dateTime": item.get("dateTime"),
+        "value": item.get("value"),
+        "unit": item.get("unitName"),
     }
 
 
 @app.get("/staffordshire/boundary")
 def staffordshire_boundary():
-    _, _, _, boundary_geojson = _load_staffs_plus_stoke_polygon_and_bbox()
-    return boundary_geojson
+    try:
+        return json.loads(BOUNDARY_GEOJSON_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"/staffordshire/boundary failed: {e}")
+
+
+@app.get("/staffordshire/bbox")
+def staffordshire_bbox():
+    _, bbox = _load_boundary_poly_and_bbox()
+    return {
+        "minLon": bbox["minLon"],
+        "minLat": bbox["minLat"],
+        "maxLon": bbox["maxLon"],
+        "maxLat": bbox["maxLat"],
+        "includes": ["Staffordshire"],
+    }
 
 
 @app.get("/staffordshire/districts")
@@ -617,8 +548,8 @@ def staffordshire_stations():
         if _STATIONS_CACHE["data"] is not None and (now - _STATIONS_CACHE["ts"]) < _STATIONS_TTL_SECONDS:
             return _STATIONS_CACHE["data"]
 
-        area_poly, bbox, _, _ = _load_staffs_plus_stoke_polygon_and_bbox()
-        area_prepped = prep(area_poly)
+        boundary, bbox = _load_boundary_poly_and_bbox()
+        pboundary = prep(boundary)
 
         minLon = bbox["minLon"]
         minLat = bbox["minLat"]
@@ -627,6 +558,7 @@ def staffordshire_stations():
 
         centre_lat = (minLat + maxLat) / 2
         centre_lon = (minLon + maxLon) / 2
+
         radius_km = max((maxLat - minLat) * 111, (maxLon - minLon) * 111) / 2
         radius_km = radius_km + 15
 
@@ -635,27 +567,33 @@ def staffordshire_stations():
         r.raise_for_status()
         data = r.json()
 
-        items = data.get("items", [])
-        stations = []
+        items = data.get("items", []) or []
 
+        inside_rows = []
         for s in items:
             lat = s.get("lat")
             lon = s.get("long")
             if lat is None or lon is None:
                 continue
 
-            pt = Point(float(lon), float(lat))
-            if not area_prepped.contains(pt):
+            try:
+                pt = Point(float(lon), float(lat))
+            except Exception:
                 continue
 
-            stations.append({
-                "id": s.get("stationReference"),
-                "label": s.get("label"),
-                "lat": lat,
-                "long": lon,
-            })
+            if not pboundary.contains(pt):
+                continue
 
-        out = {"count": len(stations), "stations": stations}
+            inside_rows.append(
+                {
+                    "id": s.get("stationReference"),
+                    "label": s.get("label"),
+                    "lat": lat,
+                    "long": lon,
+                }
+            )
+
+        out = {"count": len(inside_rows), "stations": inside_rows}
         _STATIONS_CACHE["ts"] = now
         _STATIONS_CACHE["data"] = out
         return out
@@ -667,7 +605,7 @@ def staffordshire_stations():
 @app.get("/staffordshire/status")
 def staffordshire_status(offset: int = 0, limit: int = 10):
     stations_payload = staffordshire_stations()
-    stations = stations_payload.get("stations", [])
+    stations = stations_payload.get("stations", []) or []
 
     total = len(stations)
     start = max(0, offset)
@@ -675,7 +613,9 @@ def staffordshire_status(offset: int = 0, limit: int = 10):
     batch = stations[start:end]
 
     items_out = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
+
+    max_workers = 10
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(_fetch_station_row, st) for st in batch]
         for fut in as_completed(futures):
             try:
