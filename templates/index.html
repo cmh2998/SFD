@@ -1084,10 +1084,15 @@ function applyPulseToFastestRising(levelRows) {
         iconAnchor: [6, 6]
     })
 
-    const m = L.marker([it.lat, it.long], { icon }).addTo(map)
+    const m = L.marker([it.lat, it.long], {
+        icon,
+        interactive: false,
+        keyboard: false,
+        pane: "shadowPane"
+    }).addTo(map)
+
     pulseMarkers[it.id] = m
 })
-}
 
 function zoomToStation(stationId) {
     if (!stationId) return
