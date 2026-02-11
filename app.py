@@ -167,7 +167,20 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
     if not isinstance(features, list):
         raise HTTPException(status_code=500, detail="Boundary GeoJSON features is not a list")
 
-    wanted = ["staffordshire", "stoke-on-trent", "stoke on trent", "stoke-on trent"]
+    # Try a robust selection for "Staffordshire area" using LAD names
+    # Many datasets do not contain a single feature called "Staffordshire".
+    include_terms = [
+        "stoke",        # Stoke-on-Trent
+        "stafford",     # Stafford, Staffordshire Moorlands, etc.
+        "tamworth",
+        "lichfield",
+        "cannock",
+        "newcastle",    # Newcastle-under-Lyme
+        "east staffordshire",
+        "south staffordshire",
+        "moorlands",
+        "under-lyme",
+    ]
 
     kept_geoms = []
     kept_names = []
@@ -181,7 +194,7 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
             continue
 
         low = nm.lower()
-        if any(w in low for w in wanted):
+        if any(t in low for t in include_terms):
             geom_dict = f.get("geometry")
             if not geom_dict:
                 continue
@@ -192,10 +205,26 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
             except Exception:
                 continue
 
+    # If we still found nothing, fall back to union of all features
+    if not kept_geoms:
+        for f in features:
+            if not isinstance(f, dict):
+                continue
+            geom_dict = f.get("geometry")
+            if not geom_dict:
+                continue
+            try:
+                g4326 = _to_wgs84_geom(geom_dict, source_epsg)
+                kept_geoms.append(g4326)
+                props = f.get("properties") or {}
+                kept_names.append(_pick_name(props) or "Unknown")
+            except Exception:
+                continue
+
     if not kept_geoms:
         raise HTTPException(
             status_code=404,
-            detail="Could not find Staffordshire or Stoke-on-Trent in boundary GeoJSON properties",
+            detail="Boundary GeoJSON contained no usable geometries",
         )
 
     area_poly = kept_geoms[0]
