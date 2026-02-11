@@ -1378,7 +1378,80 @@ function toggleRiverLabels() {
     rebuildRiverLabels()
 }
 function exportSitrepPdf() {
-    alert("SITREP export not implemented yet")
+    const rows = latestLevelRows.slice().sort((a, b) => {
+        const sa = a.item.state === "High" ? 3 : a.item.state === "Elevated" ? 2 : a.item.state === "Normal" ? 1 : 0
+        const sb = b.item.state === "High" ? 3 : b.item.state === "Elevated" ? 2 : b.item.state === "Normal" ? 1 : 0
+        if (sb !== sa) return sb - sa
+        return (a.item.label || "").localeCompare(b.item.label || "")
+    })
+
+    const win = window.open("", "_blank")
+
+    win.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Staffordshire Flood SITREP</title>
+<style>
+body{font-family:Arial,Helvetica,sans-serif;margin:24px}
+h1{margin-bottom:4px}
+.meta{color:#555;margin-bottom:16px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{border:1px solid #ccc;padding:6px;text-align:left}
+th{background:#f2f2f2}
+.high{background:#ffd6d6}
+.elevated{background:#fff0c7}
+.normal{background:#e7f7e7}
+</style>
+</head>
+<body>
+
+<h1>Staffordshire Flood SITREP</h1>
+<div class="meta">
+Generated: ${new Date().toLocaleString()}<br>
+Last refresh: ${lastRefreshLocal || "Unknown"}
+</div>
+
+<h2>Hotspots</h2>
+${latestHotspots && latestHotspots.length
+    ? latestHotspots.map((h,i)=>`<div>${i+1}. ${h.worst} (${h.count} sites)</div>`).join("")
+    : "<div>None</div>"}
+
+<h2>Stations</h2>
+<table>
+<tr>
+<th>Station</th>
+<th>River</th>
+<th>Level</th>
+<th>Trend</th>
+<th>Status</th>
+<th>Reporting</th>
+<th>Time</th>
+</tr>
+
+${rows.map(r=>{
+    const it=r.item
+    const fr=r.freshness
+    const cls = (it.state||"").toLowerCase()
+    const v=formatValueAndUnit(it).text
+    return `<tr class="${cls}">
+<td>${it.label||it.id||""}</td>
+<td>${it.riverName||""}</td>
+<td>${v}</td>
+<td>${it.trend||""}</td>
+<td>${it.state||""}</td>
+<td>${fr.status||""}</td>
+<td>${formatDateTime(it.dateTime)||""}</td>
+</tr>`
+}).join("")}
+
+</table>
+
+</body>
+</html>
+`)
+    win.document.close()
 }
 /* ------------------------------------------------------------
    Modal + buttons
