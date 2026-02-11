@@ -1409,7 +1409,8 @@ async function refreshFloodWarningsSummary() {
     // keep last known value if fetch fails
   }
 }
-function exportSitrepPdf() {
+async function exportSitrepPdf() {
+await refreshFloodWarningsSummary()
   const rows = latestLevelRows.slice()
 
   const stateWeight = (s) => (s === "High" ? 3 : s === "Elevated" ? 2 : s === "Normal" ? 1 : 0)
@@ -1710,7 +1711,7 @@ function exportSitrepPdf() {
       <h3>Operational picture</h3>
       <div class="small">${esc(operationalPicture)}</div>
 ${
-  window.latestFloodWarnings
+  (window.latestFloodWarnings || {})
     ? `<div class="divider"></div>
        <h3>Flood warnings for Staffordshire</h3>
 
