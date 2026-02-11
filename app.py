@@ -15,6 +15,7 @@ from shapely.prepared import prep
 from shapely.ops import unary_union
 
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 import base64
 import secrets
@@ -77,7 +78,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(BasicAuthMiddleware)
 
 BASE_DIR = Path(__file__).resolve().parent
-
+app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 # Use this file name in your repo
 BOUNDARY_GEOJSON_PATH = BASE_DIR / "staffordshire_boundary.geojson"
 
