@@ -1683,121 +1683,130 @@ function markerPassesMode(item) {
     return true
 }
 
+let refreshInFlight = false
+
 async function refreshStatusAll() {
     if (!stationsLoaded) return
+    if (refreshInFlight) return
 
-    const counts = { high: 0, elevated: 0, normal: 0, delayed: 0, stale: 0, offline: 0, nodata: 0 }
+    refreshInFlight = true
 
-    let worst = null
-    let risingLevelCount = 0
-    let offlineCount = 0
+    try {
+        const counts = { high: 0, elevated: 0, normal: 0, delayed: 0, stale: 0, offline: 0, nodata: 0 }
 
-    latestItemsById = {}
-    latestLevelRows = []
-    worstStation = null
+        let worst = null
+        let risingLevelCount = 0
+        let offlineCount = 0
 
-    let offset = 0
+        latestItemsById = {}
+        latestLevelRows = []
+        worstStation = null
 
-    while (true) {
-        const page = await fetchStatusPage(offset, PAGE_LIMIT)
+        let offset = 0
 
-        page.items.forEach(item => {
-            latestItemsById[item.id] = item
+        while (true) {
+            const page = await fetchStatusPage(offset, PAGE_LIMIT)
 
-            const marker = markers[item.id]
-            if (!marker) return
+            page.items.forEach(item => {
+                latestItemsById[item.id] = item
 
-            const freshness = classifyFreshness(item.dateTime)
-            const baseColour = stateToColour(item.state)
+                const marker = markers[item.id]
+                if (!marker) return
 
-            const showMarker = markerPassesMode(item)
-            if (!showMarker) {
-                marker.setStyle({ opacity: 0, fillOpacity: 0 })
-                return
-            } else {
-                marker.setStyle({ opacity: 1, fillOpacity: 0.75 })
-            }
+                const freshness = classifyFreshness(item.dateTime)
+                const baseColour = stateToColour(item.state)
 
-            if (freshness.status === "Offline") {
-                setMarkerStyle(marker, COLOURS.offline, { fillOpacity: 0.35, opacity: 0.6, weight: 2 })
-                if (item.value == null || item.dateTime == null) counts.nodata += 1
-                else counts.offline += 1
-                offlineCount += 1
-            } else if (freshness.status === "Stale") {
-                setMarkerStyle(marker, COLOURS.stale, { fillOpacity: 0.75, opacity: 1, weight: 2 })
-                counts.stale += 1
-            } else if (freshness.status === "Delayed") {
-                setMarkerStyle(marker, COLOURS.delayed, { fillOpacity: 0.75, opacity: 1, weight: 2 })
-                counts.delayed += 1
-            } else {
-                setMarkerStyle(marker, baseColour, { fillOpacity: 0.8, opacity: 1, weight: 2 })
-                if (item.state === "High") counts.high += 1
-                else if (item.state === "Elevated") counts.elevated += 1
-                else if (item.state === "Normal") counts.normal += 1
-                else counts.nodata += 1
-            }
+                const showMarker = markerPassesMode(item)
+                if (!showMarker) {
+                    marker.setStyle({ opacity: 0, fillOpacity: 0 })
+                    return
+                } else {
+                    marker.setStyle({ opacity: 1, fillOpacity: 0.75 })
+                }
 
-            marker.bindPopup(buildPopup(item, freshness))
+                if (freshness.status === "Offline") {
+                    setMarkerStyle(marker, COLOURS.offline, { fillOpacity: 0.35, opacity: 0.6, weight: 2 })
+                    if (item.value == null || item.dateTime == null) counts.nodata += 1
+                    else counts.offline += 1
+                    offlineCount += 1
+                } else if (freshness.status === "Stale") {
+                    setMarkerStyle(marker, COLOURS.stale, { fillOpacity: 0.75, opacity: 1, weight: 2 })
+                    counts.stale += 1
+                } else if (freshness.status === "Delayed") {
+                    setMarkerStyle(marker, COLOURS.delayed, { fillOpacity: 0.75, opacity: 1, weight: 2 })
+                    counts.delayed += 1
+                } else {
+                    setMarkerStyle(marker, baseColour, { fillOpacity: 0.8, opacity: 1, weight: 2 })
+                    if (item.state === "High") counts.high += 1
+                    else if (item.state === "Elevated") counts.elevated += 1
+                    else if (item.state === "Normal") counts.normal += 1
+                    else counts.nodata += 1
+                }
 
-            const score = worstScore(item, freshness)
-            if (!worst || score > worst.score) {
-                worst = { item, freshness, score }
-                worstStation = item
-            }
+                marker.bindPopup(buildPopup(item, freshness))
 
-            const p2 = (item.parameter || "").toLowerCase()
-            const u2 = (item.unitShort || item.unit || "").toLowerCase()
-            const isLevel = p2 === "level" || u2 === "m"
-            if (isLevel) {
-                latestLevelRows.push({ item, freshness })
-                if (item.trend === "Rising") risingLevelCount += 1
-            }
-        })
+                const score = worstScore(item, freshness)
+                if (!worst || score > worst.score) {
+                    worst = { item, freshness, score }
+                    worstStation = item
+                }
 
+                const p2 = (item.parameter || "").toLowerCase()
+                const u2 = (item.unitShort || item.unit || "").toLowerCase()
+                const isLevel = p2 === "level" || u2 === "m"
+                if (isLevel) {
+                    latestLevelRows.push({ item, freshness })
+                    if (item.trend === "Rising") risingLevelCount += 1
+                }
+            })
+
+            updateLegendCounts(counts)
+
+            if (!page.hasMore) break
+            offset = page.nextOffset
+            if (offset == null) break
+        }
+
+        lastRefreshLocal = new Date().toLocaleString()
         updateLegendCounts(counts)
 
-        if (!page.hasMore) break
-        offset = page.nextOffset
-        if (offset == null) break
-    }
+        setIntel("intelRising", risingLevelCount)
+        setIntel("intelOffline", offlineCount)
+        setIntel("intelLast", lastRefreshLocal)
 
-    lastRefreshLocal = new Date().toLocaleString()
-    updateLegendCounts(counts)
+        if (worst) {
+            const w = worst.item
+            const v = formatValueAndUnit(w)
+            setIntel("intelWorst", `${w.label || w.id} (${w.state}, ${v.text})`)
+        } else {
+            setIntel("intelWorst", "Unknown")
+        }
 
-    setIntel("intelRising", risingLevelCount)
-    setIntel("intelOffline", offlineCount)
-    setIntel("intelLast", lastRefreshLocal)
+        latestLevelRows.sort((a, b) => {
+            const an = (a.item.label || "").toLowerCase()
+            const bn = (b.item.label || "").toLowerCase()
+            return an.localeCompare(bn)
+        })
 
-    if (worst) {
-        const w = worst.item
-        const v = formatValueAndUnit(w)
-        setIntel("intelWorst", `${w.label || w.id} (${w.state}, ${v.text})`)
-    } else {
-        setIntel("intelWorst", "Unknown")
-    }
+        latestHotspots = buildHotspots(latestLevelRows)
+        updateHotspotPanel()
 
-    latestLevelRows.sort((a, b) => {
-        const an = (a.item.label || "").toLowerCase()
-        const bn = (b.item.label || "").toLowerCase()
-        return an.localeCompare(bn)
-    })
+        const attention = computeAttention(latestLevelRows)
+        updateAttentionPanel(attention)
 
-    latestHotspots = buildHotspots(latestLevelRows)
-    updateHotspotPanel()
+        applyPulseToFastestRising(latestLevelRows)
 
-    const attention = computeAttention(latestLevelRows)
-    updateAttentionPanel(attention)
+        const currentSnap = makeSnapshot(latestLevelRows)
+        const delta = summariseDelta(previousSnapshotById, currentSnap)
+        updateDeltaPanel(delta)
+        previousSnapshotById = currentSnap
 
-    applyPulseToFastestRising(latestLevelRows)
-
-    const currentSnap = makeSnapshot(latestLevelRows)
-    const delta = summariseDelta(previousSnapshotById, currentSnap)
-    updateDeltaPanel(delta)
-    previousSnapshotById = currentSnap
-
-    const back = document.getElementById("tableModalBack")
-    if (back && back.style.display === "flex") {
-        renderTable()
+        const back = document.getElementById("tableModalBack")
+        if (back && back.style.display === "flex") {
+            renderTable()
+        }
+    } finally {
+        refreshInFlight = false
     }
 }
 
@@ -1841,9 +1850,13 @@ document.getElementById("btnCatchments")?.addEventListener("click", toggleCatchm
 document.getElementById("btnDistricts")?.addEventListener("click", toggleDistricts)
 document.getElementById("btnRivers")?.addEventListener("click", toggleRiverLabels)
 
-document.getElementById("markerMode")?.addEventListener("change", (e) => {
+document.getElementById("markerMode")?.addEventListener("change", async (e) => {
     markerMode = e.target.value || "all"
-    refreshStatusAll()
+    try {
+        await refreshStatusAll()
+    } catch (err) {
+        console.error("refreshStatusAll failed after markerMode change:", err)
+    }
 })
 
 async function init() {
