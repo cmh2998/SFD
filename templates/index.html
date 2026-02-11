@@ -382,6 +382,17 @@ let markerMode = "all"
 let pulseMarkers = {}
 function applyMarkerMode() {
     const want = markerMode || "all"
+    // Hide pulse markers when not showing level markers
+    const hidePulses = (want === "rainfall")
+    Object.keys(pulseMarkers).forEach(id => {
+    const pm = pulseMarkers[id]
+    if (!pm) return
+    if (hidePulses) {
+        if (map.hasLayer(pm)) map.removeLayer(pm)
+    } else {
+        if (!map.hasLayer(pm)) pm.addTo(map)
+    }
+    })
 
     Object.keys(markers).forEach(id => {
         const m = markers[id]
@@ -1386,6 +1397,10 @@ function exportSitrepPdf() {
     })
 
     const win = window.open("", "_blank")
+    if (!win) {
+    alert("Popup blocked. Allow popups for this site to open the SITREP.")
+    return
+    }
 
     win.document.write(`
 <!DOCTYPE html>
@@ -1479,7 +1494,13 @@ document.getElementById("tableSearch")?.addEventListener("input", () => {
 })
 
 document.getElementById("btnCsv")?.addEventListener("click", exportCsvFromTable)
-document.getElementById("btnPdf")?.addEventListener("click", exportSitrepPdf)
+document.getElementById("btnPdf")?.addEventListener("click", () => {
+    if (!latestLevelRows || latestLevelRows.length === 0) {
+        alert("Data is still loading, wait a moment then try again.")
+        return
+    }
+    exportSitrepPdf()
+})
 
 document.getElementById("btnWorst")?.addEventListener("click", () => {
     if (!worstStation) return
@@ -1492,13 +1513,9 @@ document.getElementById("btnCatchments")?.addEventListener("click", toggleCatchm
 document.getElementById("btnDistricts")?.addEventListener("click", toggleDistricts)
 document.getElementById("btnRivers")?.addEventListener("click", toggleRiverLabels)
 
-document.getElementById("markerMode")?.addEventListener("change", async (e) => {
+document.getElementById("markerMode")?.addEventListener("change", (e) => {
     markerMode = e.target.value || "all"
-    try {
-        await refreshStatusAll()
-    } catch (err) {
-        console.error("refreshStatusAll failed after markerMode change:", err)
-    }
+    applyMarkerMode()
 })
 
 /* ------------------------------------------------------------
@@ -1544,7 +1561,7 @@ async function loadStations() {
             markers[st.id] = marker
         })
 
-        stationsLoaded = true
+        applyMarkerMode()
     } catch (e) {
         console.error("loadStations failed:", e)
     }
@@ -1568,11 +1585,22 @@ async function refreshStatusAll() {
     let combined = []
 
     while (true) {
-        const page = await fetchStatusPage(offset, PAGE_LIMIT)
-        const items = page.items || []
-        combined = combined.concat(items)
-        if (items.length < PAGE_LIMIT) break
-        offset += PAGE_LIMIT
+    const page = await fetchStatusPage(offset, PAGE_LIMIT)
+    const items = page.items || []
+
+    // APPLY MARKER UPDATES IMMEDIATELY
+    items.forEach(item => {
+        const m = markers[item.id]
+        if (!m) return
+        const freshness = classifyFreshness(item.dateTime)
+        const colour = stateToColour(item.state)
+        setMarkerStyle(m, colour)
+        m.setPopupContent(buildPopup(item, freshness))
+    })
+
+    combined = combined.concat(items)
+    if (items.length < PAGE_LIMIT) break
+    offset += PAGE_LIMIT
     }
 
     latestItemsById = {}
@@ -1634,7 +1662,9 @@ async function refreshStatusAll() {
     updateDeltaPanel(delta)
     previousSnapshotById = snap
 
+    requestAnimationFrame(() => {
     try { applyPulseToFastestRising(latestLevelRows) } catch (e) {}
+    })
 
     worstStation = null
     let bestScore = -1
@@ -1657,10 +1687,6 @@ async function refreshStatusAll() {
 
     if (modalBack && modalBack.style.display === "flex") {
         renderTable()
-    }
-
-    if (riverLabelsOn) {
-        rebuildRiverLabels()
     }
     applyMarkerMode()
 }
