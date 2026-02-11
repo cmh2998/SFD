@@ -29,7 +29,10 @@ DASH_PASS = os.getenv("DASH_PASS", "")
 AUTH_ENABLED = bool(DASH_USER and DASH_PASS)
 
 AUTH_SKIP_PATHS = {
+    "/",
     "/health",
+    "/favicon.ico",
+    "/templates/index.html",
 }
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
@@ -38,7 +41,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in AUTH_SKIP_PATHS:
+        if path in AUTH_SKIP_PATHS or path.startswith("/static"):
             return await call_next(request)
 
         auth = request.headers.get("Authorization", "")
