@@ -14,6 +14,8 @@ from shapely.geometry import Point, MultiPoint, shape, mapping
 from shapely.prepared import prep
 from shapely.ops import unary_union
 
+from fastapi.responses import FileResponse
+
 import base64
 import secrets
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -542,7 +544,13 @@ def health():
 def home():
     with open("templates/index.html") as f:
         return f.read()
-
+        
+@app.get("/CCU.png")
+def ccu_logo():
+    path = BASE_DIR / "CCU.png"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="CCU.png not found")
+    return FileResponse(path)
 
 @app.get("/station/{station_id}")
 def station_reading(station_id: str):
