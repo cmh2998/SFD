@@ -1422,10 +1422,15 @@ th{background:#f2f2f2}
 </head>
 <body>
 
-<h1>Staffordshire Flood SITREP</h1>
-<div class="meta">
-Generated: ${new Date().toLocaleString()}<br>
-Last refresh: ${lastRefreshLocal || "Unknown"}
+<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px">
+  <div>
+    <h1 style="margin:0 0 4px 0">Staffordshire Flood SITREP</h1>
+    <div class="meta">
+      Generated: ${new Date().toLocaleString()}<br>
+      Last refresh: ${lastRefreshLocal || "Unknown"}
+    </div>
+  </div>
+  <img src="/static/CCU.png" alt="CCU" style="height:60px;object-fit:contain">
 </div>
 
 <h2>Hotspots</h2>
