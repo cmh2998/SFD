@@ -1,6 +1,6 @@
 <!-- templates/index.html -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title>Staffordshire Flood Dashboard</title>
@@ -90,7 +90,10 @@
             font-size: 12px;
             border: 1px solid rgba(0,0,0,0.15);
             background: #f7f7f7;
+            max-width: 100%;
+            overflow-wrap: anywhere;
         }
+
         .panel .pill.pillGreen { background: rgba(26,150,65,0.12); border-color: rgba(26,150,65,0.35); }
         .panel .pill.pillAmber { background: rgba(253,174,97,0.18); border-color: rgba(253,174,97,0.55); }
         .panel .pill.pillRed { background: rgba(215,25,28,0.12); border-color: rgba(215,25,28,0.35); }
@@ -107,15 +110,8 @@
 
         .panel .hotspotLink {
             cursor: pointer; text-decoration: underline; color: #1f3a5f; font-size: 12px;
+            user-select: none;
         }
-
-        .trafficGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
-        .trafficItem { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
-        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,0.25); }
-        .dotRed { background: #d7191c; }
-        .dotAmber { background: #fdae61; }
-        .dotGreen { background: #1a9641; }
-        .dotGrey { background: #999999; }
 
         /* Table modal */
         .modalBack {
@@ -216,6 +212,7 @@
             height: 12px;
             border-radius: 50%;
             position: relative;
+            pointer-events: none;
         }
         .pulse::after {
             content: "";
@@ -230,13 +227,11 @@
             opacity: 0.6;
             background: var(--pulse-colour);
         }
-            @keyframes pulse {
+
+        @keyframes pulse {
             0% { transform: translate(-50%, -50%) scale(1); opacity: 0.7; }
             100% { transform: translate(-50%, -50%) scale(3.2); opacity: 0; }
-            }
-
-            .pulse { pointer-events: none; }
-
+        }
     </style>
 </head>
 
@@ -252,13 +247,11 @@
 
         <button id="btnTable">Table view</button>
         <button id="btnPdf">SITREP</button>
-
         <button id="btnWorst">Zoom to worst</button>
 
         <button id="btnRadar">Radar</button>
         <button id="btnWarnings">Flood warnings</button>
         <button id="btnCatchments">Catchments</button>
-        <!-- <button id="btnDistricts">Districts</button> -->
         <button id="btnRivers">River labels</button>
     </div>
 </div>
@@ -305,6 +298,9 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
+/* ------------------------------------------------------------
+   Settings
+   ------------------------------------------------------------ */
 const REFRESH_MS = 2 * 60 * 1000
 const PAGE_LIMIT = 25
 
@@ -326,15 +322,38 @@ const COLOURS = {
 
 const HOTSPOT_RADIUS_KM = 5
 const HOTSPOT_MIN_POINTS = 2
-
 const BASELINE_KEY = "sfdb_sitrep_baseline_v1"
 
+/* ------------------------------------------------------------
+   Map init + panes
+   ------------------------------------------------------------ */
 const map = L.map("map").setView([52.9, -2.05], 9)
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors"
 }).addTo(map)
 
+/*
+CircleMarkers live in the SVG overlay by default, same as polygons
+That means catchments can sit on top and steal clicks
+Fix: give stations their own higher pane, and catchments a lower pane
+*/
+map.createPane("polygonsPane")
+map.getPane("polygonsPane").style.zIndex = 420
+
+map.createPane("labelsPane")
+map.getPane("labelsPane").style.zIndex = 630
+
+map.createPane("stationsPane")
+map.getPane("stationsPane").style.zIndex = 650
+
+map.createPane("pulsePane")
+map.getPane("pulsePane").style.zIndex = 640
+map.getPane("pulsePane").style.pointerEvents = "none"
+
+/* ------------------------------------------------------------
+   State
+   ------------------------------------------------------------ */
 let boundaryLayer = null
 let markers = {}
 let stationsLoaded = false
@@ -344,10 +363,8 @@ let latestItemsById = {}
 let latestLevelRows = []
 let previousSnapshotById = null
 let latestHotspots = []
-
 let worstStation = null
 
-// Overlays
 let radarLayer = null
 let radarOn = false
 
@@ -357,15 +374,11 @@ let warningsOn = false
 let catchmentsLayer = null
 let catchmentsOn = false
 
-let districtsLayer = null
-let districtsOn = false
-
 let riverLabelsLayer = null
 let riverLabelsOn = false
 
 let markerMode = "all"
 
-// For pulse markers
 let pulseMarkers = {}
 
 function nowMs() { return Date.now() }
@@ -420,7 +433,7 @@ function stateToColour(state) {
 }
 
 function markerBaseStyle() {
-    return { radius: 6, color: "#666", fillColor: "#999", fillOpacity: 0.7, weight: 2, opacity: 1 }
+    return { radius: 6, color: "#666", fillColor: "#999", fillOpacity: 0.7, weight: 2, opacity: 1, pane: "stationsPane" }
 }
 
 function setMarkerStyle(marker, colour, opts) {
@@ -447,6 +460,15 @@ function formatValueAndUnit(item) {
     return { label: "Value", text: `${v}${unitText}` }
 }
 
+function escapeHtml(s) {
+    return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;")
+}
+
 function buildPopup(item, freshness) {
     const ageText = freshness.ageMs == null ? "Unknown" : formatAge(freshness.ageMs)
     const v = formatValueAndUnit(item)
@@ -469,12 +491,14 @@ function buildPopup(item, freshness) {
     `
 }
 
+/* ------------------------------------------------------------
+   Legend + intel panels
+   ------------------------------------------------------------ */
 function createLegendControl() {
     const legend = L.control({ position: "bottomleft" })
 
     legend.onAdd = function() {
         const div = L.DomUtil.create("div", "legend")
-
         div.innerHTML = `
             <h4>Status</h4>
 
@@ -521,8 +545,6 @@ function createIntelPanel() {
                 <div class="item"><b>Areas of interest</b></div>
                 <div id="attentionList" class="tiny">None</div>
             </div>
-
-            <!-- District traffic lights disabled: no district polygons loaded -->
 
             <div class="section">
                 <div class="item"><b>Changes since last refresh</b></div>
@@ -582,37 +604,9 @@ function worstScore(item, freshness) {
     return score
 }
 
-function escapeHtml(s) {
-    return String(s)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;")
-}
-
-function pillClassForState(state) {
-    if (state === "High") return "pillRed"
-    if (state === "Elevated") return "pillAmber"
-    if (state === "Normal") return "pillGreen"
-    return ""
-}
-
-function pillClassForTrend(trend) {
-    if (trend === "Rising") return "pillRed"
-    if (trend === "Falling") return "pillAmber"
-    if (trend === "Steady") return "pillGreen"
-    return ""
-}
-
-function pillClassForFreshness(status) {
-    if (status === "Offline") return "pillRed"
-    if (status === "Stale") return "pillAmber"
-    if (status === "Delayed") return "pillAmber"
-    if (status === "Live") return "pillGreen"
-    return ""
-}
-
+/* ------------------------------------------------------------
+   Table
+   ------------------------------------------------------------ */
 function downloadText(filename, text, mime) {
     const blob = new Blob([text], { type: mime || "text/plain" })
     const url = URL.createObjectURL(blob)
@@ -805,6 +799,13 @@ function buildHotspots(levelRows) {
     return clusters.slice(0, 5)
 }
 
+/* This was missing in your file and breaks the whole script */
+function hotspotClass(count) {
+    if (count >= 4) return "pillHotRed"
+    if (count >= 2) return "pillHotAmber"
+    return "pillHotGreen"
+}
+
 function updateHotspotPanel() {
     const el = document.getElementById("hotspotList")
     if (!el) return
@@ -840,7 +841,6 @@ function updateHotspotPanel() {
 /* ------------------------------------------------------------
    Change detection since last refresh
    ------------------------------------------------------------ */
-
 function makeSnapshot(levelRows) {
     const snap = {}
     levelRows.forEach(r => {
@@ -876,8 +876,8 @@ function summariseDelta(prevSnap, currSnap) {
     let newlyRising = 0
 
     const notable = []
-
     const ids = new Set([...Object.keys(prevSnap), ...Object.keys(currSnap)])
+
     ids.forEach(id => {
         const p = prevSnap[id]
         const c = currSnap[id]
@@ -929,7 +929,6 @@ function summariseDelta(prevSnap, currSnap) {
     if (newlyNoData) parts.push(`+${newlyNoData} lost data`)
 
     const text = parts.length ? parts.join(" | ") : "No material changes since last refresh"
-
     return { text, notable: notable.slice(0, 8) }
 }
 
@@ -945,22 +944,39 @@ function updateDeltaPanel(delta) {
     let html = `<div>${escapeHtml(delta.text)}</div>`
     if (delta.notable && delta.notable.length) {
         html += `<div style="margin-top:6px">`
-        delta.notable.forEach(n => {
-            html += `<div>• ${escapeHtml(n)}</div>`
-        })
+        delta.notable.forEach(n => { html += `<div>• ${escapeHtml(n)}</div>` })
         html += `</div>`
     }
     el.innerHTML = html
 }
 
 /* ------------------------------------------------------------
-   Officer attention list
-   Fastest rising pulse
-   District traffic lights
+   Officer attention list + pulse
    ------------------------------------------------------------ */
+function pillClassForState(state) {
+    if (state === "High") return "pillRed"
+    if (state === "Elevated") return "pillAmber"
+    if (state === "Normal") return "pillGreen"
+    return ""
+}
+
+function pillClassForTrend(trend) {
+    if (trend === "Rising") return "pillRed"
+    if (trend === "Falling") return "pillAmber"
+    if (trend === "Steady") return "pillGreen"
+    return ""
+}
+
+function pillClassForFreshness(status) {
+    if (status === "Offline") return "pillRed"
+    if (status === "Stale") return "pillAmber"
+    if (status === "Delayed") return "pillAmber"
+    if (status === "Live") return "pillGreen"
+    return ""
+}
 
 function computeAttention(levelRows) {
-    const candidates = levelRows
+    return levelRows
         .filter(r => r.item && r.item.value != null)
         .map(r => {
             const rate = r.item.trendRatePerHour != null ? Number(r.item.trendRatePerHour) : null
@@ -973,8 +989,6 @@ function computeAttention(levelRows) {
         })
         .sort((a, b) => b.score - a.score)
         .slice(0, 8)
-
-    return candidates
 }
 
 function updateAttentionPanel(attention) {
@@ -985,7 +999,7 @@ function updateAttentionPanel(attention) {
         return
     }
 
-    el.innerHTML = attention.map(a => {
+el.innerHTML = attention.map(a => {
         const it = a.r.item
         const fr = a.r.freshness
         const rateTxt = a.rate != null ? `${a.rate.toFixed(3)} /hr` : "n/a"
@@ -1046,15 +1060,18 @@ function updateTrafficLights(levelRows) {
 
     el.innerHTML = entries.map(([name, sev]) => {
         const dotClass = sev === 3 ? "dot dotRed" : sev === 2 ? "dot dotAmber" : sev === 1 ? "dot dotGreen" : "dot dotGrey"
-        const label = name
         return `
             <div class="trafficItem">
-                <div>${escapeHtml(label)}</div>
+                <div>${escapeHtml(name)}</div>
                 <span class="${dotClass}"></span>
             </div>
         `
     }).join("")
 }
+
+/* ------------------------------------------------------------
+   Pulse markers
+   ------------------------------------------------------------ */
 
 function clearPulseMarkers() {
     Object.keys(pulseMarkers).forEach(id => {
@@ -1097,7 +1114,7 @@ function applyPulseToFastestRising(levelRows) {
         pulseMarkers[it.id] = m
     })
 }
-    
+
 function zoomToStation(stationId) {
     if (!stationId) return
     const m = markers[stationId]
@@ -1116,12 +1133,10 @@ let radarFrameUrl = null
 let radarLoading = false
 
 function removeAnyRadarLayers() {
-    // Removes the known layer
     if (radarLayer && map.hasLayer(radarLayer)) {
         radarLayer.removeFrom(map)
     }
 
-    // Defensive: remove any other tile layers that look like RainViewer
     map.eachLayer(l => {
         const url = (l && typeof l.getTileUrl === "function") ? l.getTileUrl({ x: 0, y: 0, z: 0 }) : ""
         if (typeof url === "string" && url.includes("rainviewer.com")) {
@@ -1131,8 +1146,6 @@ function removeAnyRadarLayers() {
 }
 
 async function toggleRadar() {
-
-    // If we already have a layer, toggle it
     if (radarLayer) {
         if (map.hasLayer(radarLayer)) {
             removeAnyRadarLayers()
@@ -1144,7 +1157,6 @@ async function toggleRadar() {
         return
     }
 
-    // Prevent double clicks while loading
     if (radarLoading) return
     radarLoading = true
 
@@ -1153,7 +1165,6 @@ async function toggleRadar() {
         if (!res.ok) return
 
         const j = await res.json()
-
         const frames = j?.radar?.past
         if (!frames || !frames.length) return
 
@@ -1175,9 +1186,7 @@ async function toggleRadar() {
 
         radarLayer.addTo(map)
         radarOn = true
-
     } catch (e) {
-        // ignore
     } finally {
         radarLoading = false
     }
@@ -1196,7 +1205,6 @@ async function toggleWarnings() {
 
         const raw = await res.json()
 
-        // Keep only Flood Warning (2) and Severe Flood Warning (1)
         const geo = {
             type: "FeatureCollection",
             features: (raw.features || []).filter(f => {
@@ -1227,8 +1235,14 @@ async function toggleWarnings() {
                 )
             }
         }).addTo(map)
-
     } catch (e) {}
+}
+
+/* Make a non-interactive pane for polygons so they don't block station clicks */
+if (!map.getPane("polygonsPane")) {
+    map.createPane("polygonsPane")
+    map.getPane("polygonsPane").style.zIndex = 250
+    map.getPane("polygonsPane").style.pointerEvents = "none"
 }
 
 async function toggleCatchments() {
@@ -1246,12 +1260,19 @@ async function toggleCatchments() {
         if (catchmentsLayer) map.removeLayer(catchmentsLayer)
 
         catchmentsLayer = L.geoJSON(geo, {
+            pane: "polygonsPane",
             style: { color: "#111111", weight: 1, fillOpacity: 0.06 },
             onEachFeature: (f, layer) => {
                 const p = f.properties || {}
                 layer.bindPopup(`<b>${escapeHtml(p.catchmentName || "Catchment")}</b><br>Stations: ${escapeHtml(p.stationCount || 0)}`)
             }
         }).addTo(map)
+
+        /* Extra safety: ensure SVG paths don't eat clicks */
+        try {
+            const el = catchmentsLayer.getPane && catchmentsLayer.getPane()
+            if (el) el.style.pointerEvents = "none"
+        } catch (e) {}
     } catch (e) {}
 }
 
@@ -1270,21 +1291,25 @@ async function toggleDistricts() {
         if (districtsLayer) map.removeLayer(districtsLayer)
 
         districtsLayer = L.geoJSON(geo, {
+            pane: "polygonsPane",
             style: { color: "#333333", weight: 1, fillOpacity: 0 },
             onEachFeature: (f, layer) => {
                 const p = f.properties || {}
                 layer.bindPopup(`<b>${escapeHtml(p.name || "District")}</b>`)
             }
         }).addTo(map)
+
+        try {
+            const el = districtsLayer.getPane && districtsLayer.getPane()
+            if (el) el.style.pointerEvents = "none"
+        } catch (e) {}
     } catch (e) {}
 }
 
-function toggleRiverLabels() {
-    riverLabelsOn = !riverLabelsOn
-    if (!riverLabelsOn) {
-        if (riverLabelsLayer) { map.removeLayer(riverLabelsLayer); riverLabelsLayer = null }
-        return
-    }
+/* River labels: always rebuild from latestLevelRows, and rebuild after refresh if toggled on */
+function rebuildRiverLabels() {
+    if (riverLabelsLayer) { try { map.removeLayer(riverLabelsLayer) } catch (e) {} }
+    riverLabelsLayer = null
 
     const groups = {}
     latestLevelRows.forEach(r => {
@@ -1296,7 +1321,7 @@ function toggleRiverLabels() {
 
     const feats = []
     Object.entries(groups).forEach(([name, pts]) => {
-        if (pts.length < 2) return
+        if (!pts.length) return
         const avgLat = pts.reduce((a, p) => a + p[0], 0) / pts.length
         const avgLon = pts.reduce((a, p) => a + p[1], 0) / pts.length
         feats.push({ name, lat: avgLat, lon: avgLon })
@@ -1309,514 +1334,19 @@ function toggleRiverLabels() {
             html: `<div style="background:rgba(255,255,255,0.85);border:1px solid rgba(0,0,0,0.2);border-radius:999px;padding:2px 8px;font-size:11px">${escapeHtml(f.name)}</div>`,
             iconSize: null
         })
-        L.marker([f.lat, f.lon], { icon, interactive: false }).addTo(riverLabelsLayer)
+        L.marker([f.lat, f.lon], { icon, interactive: false, keyboard: false }).addTo(riverLabelsLayer)
     })
+
     riverLabelsLayer.addTo(map)
 }
 
-/* ------------------------------------------------------------
-   SITREP HTML + PDF export
-   ------------------------------------------------------------ */
-
-function loadBaseline() {
-    try {
-        const raw = localStorage.getItem(BASELINE_KEY)
-        if (!raw) return null
-        return JSON.parse(raw)
-    } catch (e) {
-        return null
+function toggleRiverLabels() {
+    riverLabelsOn = !riverLabelsOn
+    if (!riverLabelsOn) {
+        if (riverLabelsLayer) { map.removeLayer(riverLabelsLayer); riverLabelsLayer = null }
+        return
     }
-}
-
-function saveBaseline(baseline) {
-    try {
-        localStorage.setItem(BASELINE_KEY, JSON.stringify(baseline))
-    } catch (e) {}
-}
-
-function compareSeverity(aState, bState) {
-    const score = (s) => s === "High" ? 3 : s === "Elevated" ? 2 : s === "Normal" ? 1 : 0
-    return score(bState) - score(aState)
-}
-
-function buildSitrepDeltaHtml(baseline, currentSnap) {
-    if (!baseline || !baseline.snapshot) {
-        return `
-            <div class="section">
-                <h2>Changes since last SITREP export</h2>
-                <div class="muted">No previous baseline saved on this device.</div>
-            </div>
-        `
-    }
-
-    const baseSnap = baseline.snapshot
-    const baseWhen = baseline.generatedLocal || "Unknown"
-
-    const d = summariseDelta(baseSnap, currentSnap)
-
-    const notableHtml = (d.notable && d.notable.length)
-        ? `<ol>${d.notable.map(n => `<li>${escapeHtml(n)}</li>`).join("")}</ol>`
-        : `<div class="muted">No notable changes recorded.</div>`
-
-    return `
-        <div class="section">
-            <h2>Changes since last SITREP export</h2>
-            <div class="kv">
-                <div><span class="k">Previous export</span><span class="v">${escapeHtml(baseWhen)}</span></div>
-                <div><span class="k">Headline</span><span class="v">${escapeHtml(d.text)}</span></div>
-            </div>
-            <h3>Notable changes</h3>
-            ${notableHtml}
-        </div>
-    `
-}
-
-function buildSitrepHtml(input) {
-    const levelRows = input?.levelRows || []
-    const currentSnap = input?.snapshot || {}
-    const hotspots = input?.hotspots || []
-
-    const stampLocal = new Date().toLocaleString()
-    const stampIso = new Date().toISOString()
-
-    let high = 0, elevated = 0, normal = 0, nodata = 0
-    let rising = 0, offline = 0
-
-    levelRows.forEach(r => {
-        const item = r.item
-        const freshness = r.freshness
-
-        if (item.state === "High") high += 1
-        else if (item.state === "Elevated") elevated += 1
-        else if (item.state === "Normal") normal += 1
-        else nodata += 1
-
-        if (item.trend === "Rising") rising += 1
-        if (freshness.status === "Offline") offline += 1
-    })
-
-    const concerns = [...levelRows]
-        .sort((a, b) => {
-            const s = compareSeverity(a.item.state, b.item.state)
-            if (s !== 0) return s
-
-            const at = a.item.trend === "Rising" ? 1 : 0
-            const bt = b.item.trend === "Rising" ? 1 : 0
-            if (bt !== at) return bt - at
-
-            const an = (a.item.label || "").toLowerCase()
-            const bn = (b.item.label || "").toLowerCase()
-            return an.localeCompare(bn)
-        })
-        .slice(0, 10)
-
-    const hotspotsHtml = (!hotspots.length)
-        ? `<div class="muted">None</div>`
-        : `
-            <table>
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Sites</th>
-                        <th>Worst site</th>
-                        <th>Centre (lat, lon)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${hotspots.slice(0, 5).map((h, i) => `
-                        <tr>
-                            <td>${i + 1}</td>
-                            <td>${h.count}</td>
-                            <td>${escapeHtml(h.worst)}</td>
-                            <td>${h.centroid.lat.toFixed(5)}, ${h.centroid.lon.toFixed(5)}</td>
-                        </tr>
-                    `).join("")}
-                </tbody>
-            </table>
-        `
-
-    const topConcernsHtml = (!concerns.length)
-        ? `<div class="muted">None</div>`
-        : `
-            <table>
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Station</th>
-                        <th>State</th>
-                        <th>Trend</th>
-                        <th>Reporting</th>
-                        <th>Value</th>
-                        <th>Reading time</th>
-                        <th>Age</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${concerns.map((r, i) => {
-                        const item = r.item
-                        const freshness = r.freshness
-                        const v = formatValueAndUnit(item)
-                        const ageText = freshness.ageMs == null ? "Unknown" : formatAge(freshness.ageMs)
-                        return `
-                            <tr>
-                                <td>${i + 1}</td>
-                                <td>${escapeHtml(item.label || item.id || "")}</td>
-                                <td><span class="pill ${escapeHtml(item.state || "NoData")}">${escapeHtml(item.state || "NoData")}</span></td>
-                                <td>${escapeHtml(item.trend || "Unknown")}</td>
-                                <td>${escapeHtml(freshness.status || "Offline")}</td>
-                                <td>${escapeHtml(v.text)}</td>
-                                <td>${escapeHtml(formatDateTime(item.dateTime))}</td>
-                                <td>${escapeHtml(ageText)}</td>
-                            </tr>
-                        `
-                    }).join("")}
-                </tbody>
-            </table>
-        `
-
-    const allStationsHtml = (!levelRows.length)
-        ? `<div class="muted">No level stations available.</div>`
-        : `
-            <table>
-                <thead>
-                    <tr>
-                        <th>Station</th>
-                        <th>State</th>
-                        <th>Trend</th>
-                        <th>Reporting</th>
-                        <th>Value</th>
-                        <th>Reading time</th>
-                        <th>Age</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${levelRows.map(r => {
-                        const item = r.item
-                        const freshness = r.freshness
-                        const v = formatValueAndUnit(item)
-                        const ageText = freshness.ageMs == null ? "Unknown" : formatAge(freshness.ageMs)
-                        return `
-                            <tr>
-                                <td>${escapeHtml(item.label || item.id || "")}</td>
-                                <td><span class="pill ${escapeHtml(item.state || "NoData")}">${escapeHtml(item.state || "NoData")}</span></td>
-                                <td>${escapeHtml(item.trend || "Unknown")}</td>
-                                <td>${escapeHtml(freshness.status || "Offline")}</td>
-                                <td>${escapeHtml(v.text)}</td>
-                                <td>${escapeHtml(formatDateTime(item.dateTime))}</td>
-                                <td>${escapeHtml(ageText)}</td>
-                            </tr>
-                        `
-                    }).join("")}
-                </tbody>
-            </table>
-        `
-
-    const baseline = loadBaseline()
-    const deltaHtml = buildSitrepDeltaHtml(baseline, currentSnap)
-
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Staffordshire Flood SITREP</title>
-<style>
-    body { font-family: Arial, Helvetica, sans-serif; margin: 24px; color: #111; }
-    .header { border: 1px solid rgba(0,0,0,0.15); border-radius: 10px; padding: 16px; background: #f7f9fc; }
-    .title { font-size: 22px; font-weight: bold; margin: 0 0 6px 0; color: #1f3a5f; }
-    .meta { font-size: 12px; color: #444; }
-    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
-    .card { border: 1px solid rgba(0,0,0,0.12); border-radius: 10px; padding: 10px 12px; background: white; }
-    .card .k { font-size: 12px; color: #444; }
-    .card .v { font-size: 18px; font-weight: bold; margin-top: 4px; }
-    .section { margin-top: 18px; }
-    h2 { font-size: 16px; margin: 0 0 10px 0; color: #1f3a5f; }
-    h3 { font-size: 13px; margin: 10px 0 6px 0; color: #1f3a5f; }
-    .muted { font-size: 12px; color: #555; }
-    .kv { display: grid; grid-template-columns: 160px 1fr; gap: 8px 10px; font-size: 12px; }
-    .kv .k { color: #444; }
-    .kv .v { color: #111; font-weight: bold; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(0,0,0,0.08); white-space: nowrap; }
-    th { background: #fafafa; border-top: 1px solid rgba(0,0,0,0.08); }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.15); font-size: 11px; background: #f7f7f7; }
-    .pill.High { background: rgba(215,25,28,0.12); border-color: rgba(215,25,28,0.35); }
-    .pill.Elevated { background: rgba(253,174,97,0.18); border-color: rgba(253,174,97,0.55); }
-    .pill.Normal { background: rgba(26,150,65,0.12); border-color: rgba(26,150,65,0.35); }
-    .pill.NoData { background: rgba(153,153,153,0.15); border-color: rgba(153,153,153,0.45); }
-    @media print { body { margin: 12mm; } .header { background: white; } }
-</style>
-</head>
-<body>
-
-<div class="header">
-    <div class="title">Staffordshire Flood SITREP</div>
-    <div class="meta">Generated: ${escapeHtml(stampLocal)} | ISO: ${escapeHtml(stampIso)}</div>
-
-    <div class="grid">
-        <div class="card"><div class="k">High</div><div class="v">${high}</div></div>
-        <div class="card"><div class="k">Elevated</div><div class="v">${elevated}</div></div>
-        <div class="card"><div class="k">Normal</div><div class="v">${normal}</div></div>
-        <div class="card"><div class="k">No data</div><div class="v">${nodata}</div></div>
-        <div class="card"><div class="k">Rising</div><div class="v">${rising}</div></div>
-        <div class="card"><div class="k">Offline</div><div class="v">${offline}</div></div>
-    </div>
-</div>
-
-${deltaHtml}
-
-<div class="section">
-    <h2>Hotspots (within ${HOTSPOT_RADIUS_KM} km)</h2>
-    ${hotspotsHtml}
-</div>
-
-<div class="section">
-    <h2>Top concerns (up to 10)</h2>
-    ${topConcernsHtml}
-</div>
-
-<div class="section">
-    <h2>All level stations</h2>
-    ${allStationsHtml}
-</div>
-
-</body>
-</html>
-    `.trim()
-
-    return { html, generatedLocal: stampLocal }
-}
-
-function exportSitrep() {
-    const frozenLevelRows = latestLevelRows.slice()
-    const frozenSnap = makeSnapshot(frozenLevelRows)
-    const frozenHotspots = buildHotspots(frozenLevelRows)
-
-    const built = buildSitrepHtml({
-        levelRows: frozenLevelRows,
-        hotspots: frozenHotspots,
-        snapshot: frozenSnap
-    })
-
-    const stamp = new Date().toISOString().replaceAll(":", "").replaceAll("-", "").slice(0, 15)
-    downloadText(`staffordshire_sitrep_${stamp}.html`, built.html, "text/html")
-
-    saveBaseline({
-        generatedLocal: built.generatedLocal,
-        generatedIso: new Date().toISOString(),
-        snapshot: frozenSnap
-    })
-}
-
-function exportSitrepPdf() {
-    const frozenLevelRows = latestLevelRows.slice()
-    const frozenSnap = makeSnapshot(frozenLevelRows)
-    const frozenHotspots = buildHotspots(frozenLevelRows)
-
-    const built = buildSitrepHtml({
-        levelRows: frozenLevelRows,
-        hotspots: frozenHotspots,
-        snapshot: frozenSnap
-    })
-
-    const w = window.open("", "_blank")
-    if (!w) return
-
-    w.document.open()
-    w.document.write(built.html)
-    w.document.close()
-
-    w.onload = () => {
-        w.focus()
-        w.print()
-    }
-
-    saveBaseline({
-        generatedLocal: built.generatedLocal,
-        generatedIso: new Date().toISOString(),
-        snapshot: frozenSnap
-    })
-}
-
-/* ------------------------------------------------------------
-   Data loading
-   ------------------------------------------------------------ */
-
-async function loadBoundary() {
-    try {
-        const res = await fetch("/staffordshire/boundary")
-        if (!res.ok) return
-
-        const geojson = await res.json()
-
-        if (boundaryLayer) map.removeLayer(boundaryLayer)
-
-        boundaryLayer = L.geoJSON(geojson, {
-            style: { color: "#111111", weight: 2, fillOpacity: 0 }
-        }).addTo(map)
-    } catch (e) {}
-}
-
-async function loadStations() {
-    const response = await fetch("/staffordshire/stations")
-    const data = await response.json()
-
-    Object.keys(markers).forEach(id => map.removeLayer(markers[id]))
-    markers = {}
-
-    data.stations.forEach(st => {
-        const marker = L.circleMarker([st.lat, st.long], markerBaseStyle()).addTo(map)
-        marker.bindPopup("Loading...")
-        markers[st.id] = marker
-    })
-
-    stationsLoaded = true
-}
-
-async function fetchStatusPage(offset, limit) {
-    const url = `/staffordshire/status?offset=${offset}&limit=${limit}`
-    const res = await fetch(url)
-    if (!res.ok) throw new Error("Status fetch failed")
-    return res.json()
-}
-
-function markerPassesMode(item) {
-    const p = (item.parameter || "").toLowerCase()
-    const u = (item.unitShort || item.unit || "").toLowerCase()
-    const isLevel = p === "level" || u === "m"
-    const isRain = p === "rainfall" || u === "mm"
-
-    if (markerMode === "all") return true
-    if (markerMode === "level") return isLevel
-    if (markerMode === "rainfall") return isRain
-    return true
-}
-
-let refreshInFlight = false
-
-async function refreshStatusAll() {
-    if (!stationsLoaded) return
-    if (refreshInFlight) return
-
-    refreshInFlight = true
-
-    try {
-        const counts = { high: 0, elevated: 0, normal: 0, delayed: 0, stale: 0, offline: 0, nodata: 0 }
-
-        let worst = null
-        let risingLevelCount = 0
-        let offlineCount = 0
-
-        latestItemsById = {}
-        latestLevelRows = []
-        worstStation = null
-
-        let offset = 0
-
-        while (true) {
-            const page = await fetchStatusPage(offset, PAGE_LIMIT)
-
-            page.items.forEach(item => {
-                latestItemsById[item.id] = item
-
-                const marker = markers[item.id]
-                if (!marker) return
-
-                const freshness = classifyFreshness(item.dateTime)
-                const baseColour = stateToColour(item.state)
-
-                const showMarker = markerPassesMode(item)
-                if (!showMarker) {
-                    marker.setStyle({ opacity: 0, fillOpacity: 0 })
-                    return
-                } else {
-                    marker.setStyle({ opacity: 1, fillOpacity: 0.75 })
-                }
-
-                if (freshness.status === "Offline") {
-                    setMarkerStyle(marker, COLOURS.offline, { fillOpacity: 0.35, opacity: 0.6, weight: 2 })
-                    if (item.value == null || item.dateTime == null) counts.nodata += 1
-                    else counts.offline += 1
-                    offlineCount += 1
-                } else if (freshness.status === "Stale") {
-                    setMarkerStyle(marker, COLOURS.stale, { fillOpacity: 0.75, opacity: 1, weight: 2 })
-                    counts.stale += 1
-                } else if (freshness.status === "Delayed") {
-                    setMarkerStyle(marker, COLOURS.delayed, { fillOpacity: 0.75, opacity: 1, weight: 2 })
-                    counts.delayed += 1
-                } else {
-                    setMarkerStyle(marker, baseColour, { fillOpacity: 0.8, opacity: 1, weight: 2 })
-                    if (item.state === "High") counts.high += 1
-                    else if (item.state === "Elevated") counts.elevated += 1
-                    else if (item.state === "Normal") counts.normal += 1
-                    else counts.nodata += 1
-                }
-
-                marker.bindPopup(buildPopup(item, freshness))
-
-                const score = worstScore(item, freshness)
-                if (!worst || score > worst.score) {
-                    worst = { item, freshness, score }
-                    worstStation = item
-                }
-
-                const p2 = (item.parameter || "").toLowerCase()
-                const u2 = (item.unitShort || item.unit || "").toLowerCase()
-                const isLevel = p2 === "level" || u2 === "m"
-                if (isLevel) {
-                    latestLevelRows.push({ item, freshness })
-                    if (item.trend === "Rising") risingLevelCount += 1
-                }
-            })
-
-            updateLegendCounts(counts)
-
-            if (!page.hasMore) break
-            offset = page.nextOffset
-            if (offset == null) break
-        }
-
-        lastRefreshLocal = new Date().toLocaleString()
-        updateLegendCounts(counts)
-
-        setIntel("intelRising", risingLevelCount)
-        setIntel("intelOffline", offlineCount)
-        setIntel("intelLast", lastRefreshLocal)
-
-        if (worst) {
-            const w = worst.item
-            const v = formatValueAndUnit(w)
-            setIntel("intelWorst", `${w.label || w.id} (${w.state}, ${v.text})`)
-        } else {
-            setIntel("intelWorst", "Unknown")
-        }
-
-        latestLevelRows.sort((a, b) => {
-            const an = (a.item.label || "").toLowerCase()
-            const bn = (b.item.label || "").toLowerCase()
-            return an.localeCompare(bn)
-        })
-
-        latestHotspots = buildHotspots(latestLevelRows)
-        updateHotspotPanel()
-
-        const attention = computeAttention(latestLevelRows)
-        updateAttentionPanel(attention)
-
-        applyPulseToFastestRising(latestLevelRows)
-
-        const currentSnap = makeSnapshot(latestLevelRows)
-        const delta = summariseDelta(previousSnapshotById, currentSnap)
-        updateDeltaPanel(delta)
-        previousSnapshotById = currentSnap
-
-        const back = document.getElementById("tableModalBack")
-        if (back && back.style.display === "flex") {
-            renderTable()
-        }
-    } finally {
-        refreshInFlight = false
-    }
+    rebuildRiverLabels()
 }
 
 /* ------------------------------------------------------------
@@ -1845,7 +1375,6 @@ document.getElementById("tableSearch")?.addEventListener("input", () => {
 })
 
 document.getElementById("btnCsv")?.addEventListener("click", exportCsvFromTable)
-
 document.getElementById("btnPdf")?.addEventListener("click", exportSitrepPdf)
 
 document.getElementById("btnWorst")?.addEventListener("click", () => {
@@ -1867,6 +1396,10 @@ document.getElementById("markerMode")?.addEventListener("change", async (e) => {
         console.error("refreshStatusAll failed after markerMode change:", err)
     }
 })
+
+/* ------------------------------------------------------------
+   Init
+   ------------------------------------------------------------ */
 
 async function init() {
     await loadBoundary()
