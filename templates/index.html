@@ -1077,26 +1077,27 @@ function applyPulseToFastestRising(levelRows) {
         .slice(0, 5)
 
     rising.forEach(x => {
-    const it = x.r.item
-    const colour = stateToColour(it.state)
+        const it = x.r.item
+        const colour = stateToColour(it.state)
 
-    const icon = L.divIcon({
-        className: "",
-        html: `<div class="pulse" style="background:${colour}; --pulse-colour:${colour}"></div>`,
-        iconSize: [12, 12],
-        iconAnchor: [6, 6]
+        const icon = L.divIcon({
+            className: "",
+            html: `<div class="pulse" style="background:${colour}; --pulse-colour:${colour}"></div>`,
+            iconSize: [12, 12],
+            iconAnchor: [6, 6]
+        })
+
+        const m = L.marker([it.lat, it.long], {
+            icon,
+            interactive: false,
+            keyboard: false,
+            pane: "shadowPane"
+        }).addTo(map)
+
+        pulseMarkers[it.id] = m
     })
-
-    const m = L.marker([it.lat, it.long], {
-        icon,
-        interactive: false,
-        keyboard: false,
-        pane: "shadowPane"
-    }).addTo(map)
-
-    pulseMarkers[it.id] = m
-})
-
+}
+    
 function zoomToStation(stationId) {
     if (!stationId) return
     const m = markers[stationId]
