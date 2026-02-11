@@ -1388,6 +1388,25 @@ function toggleRiverLabels() {
     }
     rebuildRiverLabels()
 }
+async function refreshFloodWarningsSummary() {
+  try {
+    const res = await fetch("/api/flood-warnings-summary", { cache: "no-store" })
+    if (!res.ok) return
+
+    const data = await res.json()
+    const c = data?.counts || {}
+
+    window.latestFloodWarnings = {
+      alerts: Number(c.alert || 0),
+      warnings: Number(c.warning || 0),
+      severe: Number(c.severe || 0),
+      fetchedAtEpoch: data?.fetchedAtEpoch || null,
+      source: data?.source || "Environment Agency Flood Monitoring API",
+    }
+  } catch (e) {
+    // Fail safe. Leave existing value alone.
+  }
+}
 function exportSitrepPdf() {
   const rows = latestLevelRows.slice()
 
@@ -1683,6 +1702,20 @@ function exportSitrepPdf() {
     <div class="card" style="border-radius:6px">
       <h3>Operational picture</h3>
       <div class="small">${esc(operationalPicture)}</div>
+${
+  window.latestFloodWarnings
+    ? `<div class="divider"></div>
+       <h3>Flood warnings for Staffordshire</h3>
+       <div class="kpi">
+         <div class="pill pill-high"><b>Severe Flood Warnings</b> ${Number(window.latestFloodWarnings.severe || 0)}</div>
+         <div class="pill"><b>Flood Warnings</b> ${Number(window.latestFloodWarnings.warnings || 0)}</div>
+         <div class="pill pill-elev"><b>Flood Alerts</b> ${Number(window.latestFloodWarnings.alerts || 0)}</div>
+       </div>
+       <div class="small muted" style="margin-top:6px">
+         Source: ${esc(window.latestFloodWarnings.source || "Environment Agency Flood Monitoring API")}
+       </div>`
+    : ``
+}
     </div>
     <div class="footer-note">
       Automatically generated decision support product from live dashboard data. Validate key points with partner intelligence and on scene reports.
@@ -2112,6 +2145,8 @@ async function refreshStatusAll() {
     offset += PAGE_LIMIT
     }
 
+    refreshFloodWarningsSummary()
+    
     latestItemsById = {}
     latestLevelRows = []
 
