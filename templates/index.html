@@ -1395,15 +1395,13 @@ async function refreshFloodWarningsSummary() {
 
     const data = await res.json()
     const c = data?.counts || {}
-    const nextAlerts = Number(c.alert || 0)
-    const nextWarnings = Number(c.warning || 0)
-    const nextSevere = Number(c.severe || 0)
-    const previous = window.latestFloodWarnings || null
-    const previousSig = previous ? `${previous.severe}|${previous.warnings}|${previous.alerts}` : null
 
     const nextAlerts = Number(c.alert || 0)
     const nextWarnings = Number(c.warning || 0)
     const nextSevere = Number(c.severe || 0)
+
+    const previous = window.latestFloodWarnings || null
+    const previousSig = previous ? `${previous.severe}|${previous.warnings}|${previous.alerts}` : null
 
     window.latestFloodWarnings = {
       alerts: nextAlerts,
@@ -1412,7 +1410,6 @@ async function refreshFloodWarningsSummary() {
       fetchedAtEpoch: data?.fetchedAtEpoch || null,
       changed: previousSig !== null && previousSig !== `${nextSevere}|${nextWarnings}|${nextAlerts}`
     }
-
   } catch (e) {
     // leave previous data in place
   }
