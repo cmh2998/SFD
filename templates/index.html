@@ -1450,10 +1450,41 @@ async function loadStations() {
 
 async function fetchStatusPage(offset, limit) {
     const url = `/staffordshire/status?offset=${offset}&limit=${limit}`
-    const res = await fetch(url, { cache: "no-store" })
+    const res = await fetch(url, { cache: "no-store", credentials: "same-origin" })
+
+    if (res.status === 401) {
+        console.error("401 Unauthorised for", url)
+        throw new Error("401 Unauthorised")
+    }
+
     if (!res.ok) throw new Error(`status ${res.status}`)
     return res.json()
-}  
+}
+/* ADD THIS FUNCTION */
+async function refreshStatusAll() {
+    // Fetch all pages
+    let offset = 0
+    let combined = []
+    while (true) {
+        const page = await fetchStatusPage(offset, PAGE_LIMIT)
+        const items = page.items || page.data || []
+        combined = combined.concat(items)
+        if (items.length < PAGE_LIMIT) break
+        offset += PAGE_LIMIT
+    }
+
+    // Apply styles to markers
+    combined.forEach(item => {
+        const m = markers[item.id]
+        if (!m) return
+        const colour = stateToColour(item.state)
+        setMarkerStyle(m, colour)
+        const freshness = classifyFreshness(item.dateTime)
+        m.setPopupContent(buildPopup(item, freshness))
+    })
+
+    lastRefreshLocal = new Date().toLocaleString()
+}
 /* ------------------------------------------------------------
    Init
    ------------------------------------------------------------ */
