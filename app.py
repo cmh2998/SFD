@@ -136,7 +136,7 @@ def _load_staffs_plus_stoke_polygon_and_bbox():
         return (
             _AREA_CACHE["poly"],
             _AREA_CACHE["bbox"],
-            _AREA_CACHE["name_col"],
+            None,
             _AREA_CACHE["includes"],
         )
 
@@ -197,10 +197,9 @@ for g in geoms[1:]:
     _AREA_CACHE["ts"] = now
     _AREA_CACHE["poly"] = area_poly
     _AREA_CACHE["bbox"] = bbox
-    _AREA_CACHE["name_col"] = name_col
     _AREA_CACHE["includes"] = includes
 
-    return area_poly, bbox, name_col, includes
+    return area_poly, bbox, None, includes
 
 
 def _get_station_measures(station_id):
