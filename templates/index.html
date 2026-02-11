@@ -1389,10 +1389,8 @@ function toggleRiverLabels() {
     rebuildRiverLabels()
 }
 function exportSitrepPdf() {
-  // Copy and sort for stable output
   const rows = latestLevelRows.slice()
 
-  // Simple severity weights using existing state and freshness only
   const stateWeight = (s) => (s === "High" ? 3 : s === "Elevated" ? 2 : s === "Normal" ? 1 : 0)
   const freshnessWeight = (st) => (st === "Live" ? 0 : st === "Delayed" ? 1 : st === "Stale" ? 2 : 3)
 
@@ -1405,7 +1403,12 @@ function exportSitrepPdf() {
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;")
 
-  // Sort rows by severity for prioritised lists
+  const normaliseTrend = (t) => (t || "").toLowerCase()
+
+  const generatedAt = new Date().toLocaleString()
+  const lastRefresh = lastRefreshLocal || "Unknown"
+
+  // Sort by severity for prioritised lists
   const severitySorted = rows
     .slice()
     .sort((a, b) => {
@@ -1415,7 +1418,7 @@ function exportSitrepPdf() {
 
       const fa = freshnessWeight(a.freshness?.status)
       const fb = freshnessWeight(b.freshness?.status)
-      if (fb !== fa) return fa - fb
+      if (fa !== fb) return fa - fb
 
       return (a.item.label || "").localeCompare(b.item.label || "")
     })
@@ -1436,12 +1439,7 @@ function exportSitrepPdf() {
     else countsByFreshness[fs] += 1
   })
 
-  // Data quality notes
-  const offlineCount = countsByFreshness.Offline || 0
-  const noDataCount = countsByState["No data"] || 0
-  const staleOrDelayedCount = (countsByFreshness.Stale || 0) + (countsByFreshness.Delayed || 0)
-
-  // Worst station summary (top item in severity list)
+  // Worst station summary
   const worstRow = severitySorted[0]
   const worstName = worstRow ? worstRow.item.label || worstRow.item.id || "" : ""
   const worstState = worstRow ? worstRow.item.state || "No data" : ""
@@ -1455,7 +1453,7 @@ function exportSitrepPdf() {
   // Highest rising sites, using existing trend field only
   const risingSites = severitySorted
     .filter((r) => {
-      const t = (r.item.trend || "").toLowerCase()
+      const t = normaliseTrend(r.item.trend)
       return t.includes("rising") || t.includes("up") || t.includes("increasing")
     })
     .slice(0, 10)
@@ -1464,7 +1462,16 @@ function exportSitrepPdf() {
   const riverMap = new Map()
   rows.forEach((r) => {
     const river = r.item.riverName || "Unknown river"
-    const current = riverMap.get(river) || { river, total: 0, worst: "No data", high: 0, elevated: 0, normal: 0, nodata: 0 }
+    const current = riverMap.get(river) || {
+      river,
+      total: 0,
+      worst: "No data",
+      high: 0,
+      elevated: 0,
+      normal: 0,
+      nodata: 0,
+    }
+
     current.total += 1
     const st = r.item.state || "No data"
     if (st === "High") current.high += 1
@@ -1472,7 +1479,6 @@ function exportSitrepPdf() {
     else if (st === "Normal") current.normal += 1
     else current.nodata += 1
 
-    // Track worst state on that river
     if (stateWeight(st) > stateWeight(current.worst)) current.worst = st
     riverMap.set(river, current)
   })
@@ -1484,44 +1490,56 @@ function exportSitrepPdf() {
     return a.river.localeCompare(b.river)
   })
 
-  // Existing hotspots are already computed by dashboard logic, reuse safely
+  // Existing hotspots already computed by dashboard logic
   const hotspots = Array.isArray(latestHotspots) ? latestHotspots : []
 
-  // Optional flood warnings summary, only if already present in memory
-  // Supported shapes:
-  // - latestFloodWarnings = { alerts: n, warnings: n, severe: n }
-  // - latestFloodWarnings = { FloodAlert: n, FloodWarning: n, SevereFloodWarning: n }
-  // - latestFloodWarnings = [{ type: "Flood Alert" }, ...]
-  const floodWarningsSummary = (() => {
-    const fw = window.latestFloodWarnings
-    if (!fw) return null
+  // Data quality notes
+  const offlineCount = countsByFreshness.Offline || 0
+  const noDataCount = countsByState["No data"] || 0
+  const staleOrDelayedCount = (countsByFreshness.Stale || 0) + (countsByFreshness.Delayed || 0)
 
-    const normalised = { alerts: 0, warnings: 0, severe: 0 }
+  // Trend descriptor (cheap and safe)
+  const trendCounts = { rising: 0, falling: 0, steady: 0, other: 0 }
+  rows.forEach((r) => {
+    const t = normaliseTrend(r.item.trend)
+    if (t.includes("rising") || t.includes("up") || t.includes("increasing")) trendCounts.rising += 1
+    else if (t.includes("falling") || t.includes("down") || t.includes("decreasing")) trendCounts.falling += 1
+    else if (t.includes("steady") || t.includes("stable")) trendCounts.steady += 1
+    else trendCounts.other += 1
+  })
 
-    if (Array.isArray(fw)) {
-      fw.forEach((x) => {
-        const t = (x?.type || x?.warningType || "").toLowerCase()
-        if (t.includes("severe")) normalised.severe += 1
-        else if (t.includes("warning")) normalised.warnings += 1
-        else if (t.includes("alert")) normalised.alerts += 1
-      })
-      return normalised
+  const trendLabel = (() => {
+    const total = trendCounts.rising + trendCounts.falling + trendCounts.steady + trendCounts.other
+    if (!total) return "Unknown"
+
+    // Pick the dominant trend if it is clearly dominant, otherwise Mixed
+    const entries = [
+      { k: "Rising", v: trendCounts.rising },
+      { k: "Falling", v: trendCounts.falling },
+      { k: "Steady", v: trendCounts.steady },
+      { k: "Mixed/Other", v: trendCounts.other },
+    ].sort((a, b) => b.v - a.v)
+
+    const top = entries[0]
+    const second = entries[1] || { v: 0 }
+
+    // Dominant if it has at least 40% and is 1.25x the next best
+    if (top.v / total >= 0.4 && top.v >= second.v * 1.25) {
+      return `Predominantly ${top.k}`
     }
-
-    if (typeof fw === "object") {
-      normalised.alerts = Number(fw.alerts ?? fw.FloodAlert ?? fw.floodAlert ?? 0) || 0
-      normalised.warnings = Number(fw.warnings ?? fw.FloodWarning ?? fw.floodWarning ?? 0) || 0
-      normalised.severe = Number(fw.severe ?? fw.SevereFloodWarning ?? fw.severeFloodWarning ?? 0) || 0
-
-      // Only show if it looks meaningful
-      if (normalised.alerts + normalised.warnings + normalised.severe === 0) return null
-      return normalised
-    }
-
-    return null
+    return "Mixed"
   })()
 
-  // Existing stations table output, but keep clean and printable
+  // Operational picture for SITREP Summary
+  const highCount = countsByState.High || 0
+  const elevCount = countsByState.Elevated || 0
+
+  const hotspotName = hotspots.length ? hotspots[0].worst || "Unknown" : "None identified"
+  const hotspotSites = hotspots.length ? hotspots[0].count || 0 : 0
+
+  const operationalPicture = `Currently ${highCount} sites are at High state and ${elevCount} at Elevated state. Trend: ${trendLabel}. Primary cluster: ${hotspotName}${hotspots.length ? ` (${hotspotSites} sites)` : ""}. Reporting: ${countsByFreshness.Live || 0} Live, ${countsByFreshness.Offline || 0} Offline.`
+
+  // Full stations table, keep same as before
   const tableRows = rows
     .slice()
     .sort((a, b) => {
@@ -1547,14 +1565,39 @@ function exportSitrepPdf() {
     })
     .join("")
 
+  // Optional flood warnings summary only if already present in memory
+  const floodWarningsSummary = (() => {
+    const fw = window.latestFloodWarnings
+    if (!fw) return null
+
+    const normalised = { alerts: 0, warnings: 0, severe: 0 }
+
+    if (Array.isArray(fw)) {
+      fw.forEach((x) => {
+        const t = (x?.type || x?.warningType || "").toLowerCase()
+        if (t.includes("severe")) normalised.severe += 1
+        else if (t.includes("warning")) normalised.warnings += 1
+        else if (t.includes("alert")) normalised.alerts += 1
+      })
+      return normalised
+    }
+
+    if (typeof fw === "object") {
+      normalised.alerts = Number(fw.alerts ?? fw.FloodAlert ?? fw.floodAlert ?? 0) || 0
+      normalised.warnings = Number(fw.warnings ?? fw.FloodWarning ?? fw.floodWarning ?? 0) || 0
+      normalised.severe = Number(fw.severe ?? fw.SevereFloodWarning ?? fw.severeFloodWarning ?? 0) || 0
+      if (normalised.alerts + normalised.warnings + normalised.severe === 0) return null
+      return normalised
+    }
+
+    return null
+  })()
+
   const win = window.open("", "_blank")
   if (!win) {
     alert("Popup blocked. Allow popups for this site to open the SITREP.")
     return
   }
-
-  const generatedAt = new Date().toLocaleString()
-  const lastRefresh = lastRefreshLocal || "Unknown"
 
   win.document.write(`
 <!DOCTYPE html>
@@ -1575,6 +1618,7 @@ function exportSitrepPdf() {
 
   .h-red{background:#c9091c}
   .h-green{background:#39a93a}
+  .h-grey{background:#2b2b2b}
 
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .card{border:1px solid #dcdcdc;border-radius:6px;padding:10px}
@@ -1609,6 +1653,8 @@ function exportSitrepPdf() {
 
   .divider{height:1px;background:#e2e2e2;margin:10px 0}
 
+  .footer-note{margin-top:10px;font-size:11px;color:#444;border-top:1px solid #e2e2e2;padding-top:8px}
+
   @media print{
     body{margin:14px}
     .section{break-inside:avoid}
@@ -1629,6 +1675,19 @@ function exportSitrepPdf() {
     </div>
   </div>
   <img src="/CCU.png" alt="CCU" class="logo">
+</div>
+
+<div class="section">
+  <div class="section-h h-grey">SITREP Summary</div>
+  <div class="section-c">
+    <div class="card" style="border-radius:6px">
+      <h3>Operational picture</h3>
+      <div class="small">${esc(operationalPicture)}</div>
+    </div>
+    <div class="footer-note">
+      Automatically generated decision support product from live dashboard data. Validate key points with partner intelligence and on scene reports.
+    </div>
+  </div>
 </div>
 
 <div class="section">
@@ -1895,7 +1954,7 @@ function exportSitrepPdf() {
 </div>
 
 <div class="section" style="margin-top:14px">
-  <div class="section-h" style="background:#2b2b2b">Stations (full list)</div>
+  <div class="section-h h-grey">Stations (full list)</div>
   <div class="section-c">
     <table>
       <tr>
@@ -1915,6 +1974,7 @@ function exportSitrepPdf() {
 </body>
 </html>
 `)
+
   win.document.close()
 }
 /* ------------------------------------------------------------
