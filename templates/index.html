@@ -1462,28 +1462,104 @@ async function fetchStatusPage(offset, limit) {
 }
 /* ADD THIS FUNCTION */
 async function refreshStatusAll() {
-    // Fetch all pages
     let offset = 0
     let combined = []
+
     while (true) {
         const page = await fetchStatusPage(offset, PAGE_LIMIT)
-        const items = page.items || page.data || []
+        const items = page.items || []
         combined = combined.concat(items)
         if (items.length < PAGE_LIMIT) break
         offset += PAGE_LIMIT
     }
 
-    // Apply styles to markers
+    latestItemsById = {}
+    latestLevelRows = []
+
+    const counts = { high: 0, elevated: 0, normal: 0, delayed: 0, stale: 0, offline: 0, nodata: 0 }
+    let risingCount = 0
+    let offlineCount = 0
+
     combined.forEach(item => {
-        const m = markers[item.id]
-        if (!m) return
-        const colour = stateToColour(item.state)
-        setMarkerStyle(m, colour)
+        if (!item || !item.id) return
+        latestItemsById[item.id] = item
+
         const freshness = classifyFreshness(item.dateTime)
-        m.setPopupContent(buildPopup(item, freshness))
+        const m = markers[item.id]
+
+        const isLevel = (item.parameter || "").toLowerCase() === "level" || (item.unitShort || "").toLowerCase() === "m"
+
+        if (isLevel) {
+            latestLevelRows.push({ item, freshness })
+        }
+
+        const colour = stateToColour(item.state)
+        if (m) {
+            setMarkerStyle(m, colour)
+            m.setPopupContent(buildPopup(item, freshness))
+        }
+
+        const rep = freshness.status
+        const st = item.state || "NoData"
+
+        if (rep === "Delayed") counts.delayed += 1
+        else if (rep === "Stale") counts.stale += 1
+        else if (rep === "Offline") counts.offline += 1
+
+        if (st === "High") counts.high += 1
+        else if (st === "Elevated") counts.elevated += 1
+        else if (st === "Normal") counts.normal += 1
+        else counts.nodata += 1
+
+        if (item.trend === "Rising") risingCount += 1
+        if (rep === "Offline") offlineCount += 1
     })
 
+    latestLevelRows.sort((a, b) => {
+        const an = (a.item.label || a.item.id || "")
+        const bn = (b.item.label || b.item.id || "")
+        return an.localeCompare(bn)
+    })
+
+    latestHotspots = buildHotspots(latestLevelRows)
+    updateHotspotPanel()
+
+    const attention = computeAttention(latestLevelRows)
+    updateAttentionPanel(attention)
+
+    const snap = makeSnapshot(latestLevelRows)
+    const delta = summariseDelta(previousSnapshotById, snap)
+    updateDeltaPanel(delta)
+    previousSnapshotById = snap
+
+    try { applyPulseToFastestRising(latestLevelRows) } catch (e) {}
+
+    worstStation = null
+    let bestScore = -1
+    latestLevelRows.forEach(r => {
+        const s = worstScore(r.item, r.freshness)
+        if (s > bestScore) {
+            bestScore = s
+            worstStation = r.item
+        }
+    })
+
+    setIntel("intelWorst", worstStation ? (worstStation.label || worstStation.id) : "Unknown")
+    setIntel("intelRising", risingCount)
+    setIntel("intelOffline", offlineCount)
+
     lastRefreshLocal = new Date().toLocaleString()
+    setIntel("intelLast", lastRefreshLocal)
+
+    updateLegendCounts(counts)
+
+    if (modalBack && modalBack.style.display === "flex") {
+        renderTable()
+    }
+
+    if (riverLabelsOn) {
+        rebuildRiverLabels()
+    }
 }
 /* ------------------------------------------------------------
    Init
