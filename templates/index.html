@@ -1713,15 +1713,19 @@ ${
   window.latestFloodWarnings
     ? `<div class="divider"></div>
        <h3>Flood warnings for Staffordshire</h3>
+
        <div class="kpi ${window.latestFloodWarnings.changed ? "pill-changed" : ""}">
          <div class="pill pill-severe"><b>Severe Flood Warnings</b> ${Number(window.latestFloodWarnings.severe || 0)}</div>
          <div class="pill pill-warning"><b>Flood Warnings</b> ${Number(window.latestFloodWarnings.warnings || 0)}</div>
          <div class="pill pill-alert"><b>Flood Alerts</b> ${Number(window.latestFloodWarnings.alerts || 0)}</div>
-         <div class="pill pill-data"><b>Last EA update</b> ${
+       </div>
+
+       <div class="small muted" style="margin-top:6px">
+         Last EA update: ${
            window.latestFloodWarnings.fetchedAtEpoch
              ? new Date(window.latestFloodWarnings.fetchedAtEpoch * 1000).toLocaleString()
              : "Unknown"
-         }</div>
+         }
        </div>`
     : ``
 }
@@ -1758,20 +1762,10 @@ ${
           <div class="pill pill-norm"><b>Normal</b> ${countsByState.Normal}</div>
           <div class="pill pill-data"><b>No data</b> ${countsByState["No data"]}</div>
         </div>
-    <div class="small muted" style="margin-top:6px">
-      
-    </div>
+    
         <div class="divider"></div>
 
-        <h3 style="margin-top:0">Reading freshness overview</h3>
-        <div class="kpi">
-          <div class="pill"><b>Live</b> ${countsByFreshness.Live}</div>
-          <div class="pill"><b>Delayed</b> ${countsByFreshness.Delayed}</div>
-          <div class="pill"><b>Stale</b> ${countsByFreshness.Stale}</div>
-          <div class="pill"><b>Offline</b> ${countsByFreshness.Offline}</div>
-          ${countsByFreshness.Unknown ? `<div class="pill"><b>Unknown</b> ${countsByFreshness.Unknown}</div>` : ""}
         </div>
-      </div>
     </div>
 
     <div class="grid" style="margin-top:12px">
