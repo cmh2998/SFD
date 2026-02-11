@@ -679,7 +679,7 @@ def staffordshire_status(offset: int = 0, limit: int = 10):
             except Exception:
                 pass
 
-    items_out.sort(key=lambda x: (x.get("label") or "", x.get("id") or ""))
+    items_out.sort(key=lambda x: (x.get("id") or ""))
 
     return {
         "total": total,
