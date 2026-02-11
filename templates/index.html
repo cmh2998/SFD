@@ -1068,12 +1068,6 @@ el.innerHTML = attention.map(a => {
     })
 }
 
-function hotspotClass(count) {
-    if (count >= 4) return "pillHotRed"
-    if (count >= 2) return "pillHotAmber"
-    return "pillHotGreen"
-}
-
 function districtSeverityScore(state) {
     if (state === "High") return 3
     if (state === "Elevated") return 2
@@ -1402,16 +1396,17 @@ async function refreshFloodWarningsSummary() {
 
     const previous = window.latestFloodWarnings || null
     const previousSig = previous ? `${previous.severe}|${previous.warnings}|${previous.alerts}` : null
+    const nextSig = `${nextSevere}|${nextWarnings}|${nextAlerts}`
 
     window.latestFloodWarnings = {
       alerts: nextAlerts,
       warnings: nextWarnings,
       severe: nextSevere,
       fetchedAtEpoch: data?.fetchedAtEpoch || null,
-      changed: previousSig !== null && previousSig !== `${nextSevere}|${nextWarnings}|${nextAlerts}`
+      changed: previousSig !== null && previousSig !== nextSig
     }
   } catch (e) {
-    // leave previous data in place
+    // keep last known value if fetch fails
   }
 }
 function exportSitrepPdf() {
