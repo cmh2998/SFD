@@ -14,7 +14,62 @@ from shapely.geometry import Point, MultiPoint, shape, mapping
 from shapely.prepared import prep
 from shapely.ops import unary_union
 
+import base64
+import secrets
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
 app = FastAPI()
+
+# ----------------------------
+# Simple Basic Auth protection
+# ----------------------------
+DASH_USER = os.getenv("DASH_USER", "")
+DASH_PASS = os.getenv("DASH_PASS", "")
+AUTH_ENABLED = bool(DASH_USER and DASH_PASS)
+
+AUTH_SKIP_PATHS = {
+    "/health",
+}
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if not AUTH_ENABLED:
+            return await call_next(request)
+
+        path = request.url.path
+        if path in AUTH_SKIP_PATHS:
+            return await call_next(request)
+
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Basic "):
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Staffordshire Flood Intelligence"'},
+                content="Authentication required",
+            )
+
+        try:
+            b64 = auth.split(" ", 1)[1].strip()
+            decoded = base64.b64decode(b64).decode("utf-8")
+            user, pwd = decoded.split(":", 1)
+        except Exception:
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Staffordshire Flood Intelligence"'},
+                content="Invalid authentication",
+            )
+
+        if not (secrets.compare_digest(user, DASH_USER) and secrets.compare_digest(pwd, DASH_PASS)):
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Staffordshire Flood Intelligence"'},
+                content="Invalid username or password",
+            )
+
+        return await call_next(request)
+
+app.add_middleware(BasicAuthMiddleware)
 
 BASE_DIR = Path(__file__).resolve().parent
 
