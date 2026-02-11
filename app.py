@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException
 import requests
 import json
-import geopandas as gpd
 import time
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
