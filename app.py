@@ -12,6 +12,7 @@ import os
 
 from shapely.geometry import Point, MultiPoint
 from shapely.prepared import prep
+from shapely.geometry import shape
 
 app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
