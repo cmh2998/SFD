@@ -31,6 +31,8 @@ AUTH_ENABLED = bool(DASH_USER and DASH_PASS)
 AUTH_SKIP_PATHS = {
     "/health",
     "/favicon.ico",
+    "/apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png",
 }
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
