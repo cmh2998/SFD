@@ -1647,7 +1647,17 @@ async function exportSitrepPdf() {
   .small{font-size:12px;color:#333}
   .muted{color:#555}
   .kpi{display:flex;gap:10px;flex-wrap:wrap}
-  .kpi .pill{border:1px solid #d0d0d0;border-radius:999px;padding:6px 10px;font-size:12px;background:#fafafa}
+  .kpi .pill{
+  border:1px solid #d0d0d0;
+  border-radius:999px;
+  padding:6px 10px;
+  font-size:12px;
+  background:#fafafa;
+}
+
+.kpi .pill-alert{border-color:#c58b00;background:#fff0c7}
+.kpi .pill-warning{border-color:#b85c00;background:#ffe1c2}
+.kpi .pill-severe{border-color:#c9091c;background:#ffd6d6}
   .pill b{font-weight:700}
   .pill-high{border-color:#c9091c;background:#fff4f4}
   .pill-elev{border-color:#c58b00;background:#fff8e6}
