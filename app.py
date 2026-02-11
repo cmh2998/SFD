@@ -29,10 +29,8 @@ DASH_PASS = os.getenv("DASH_PASS", "")
 AUTH_ENABLED = bool(DASH_USER and DASH_PASS)
 
 AUTH_SKIP_PATHS = {
-    "/",
     "/health",
     "/favicon.ico",
-    "/templates/index.html",
 }
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
