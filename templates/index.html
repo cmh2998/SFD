@@ -1276,10 +1276,14 @@ async function toggleWarnings() {
 
         warningsLayer = L.geoJSON(geo, {
             style: (f) => {
-                const lvl = f?.properties?.severityLevel
-                const colour = (lvl === 1) ? "#d7191c" : "#fdae61"
-                return { color: colour, weight: 2, fillOpacity: 0.12 }
-            },
+    const lvl = f?.properties?.severityLevel
+    let colour = "#ffd400"      // Flood Alert (yellow)
+
+    if (lvl === 2) colour = "#fdae61"   // Flood Warning (amber)
+    if (lvl === 1) colour = "#d7191c"   // Severe Flood Warning (red)
+
+    return { color: colour, weight: 2, fillOpacity: 0.12 }
+},
             onEachFeature: (feature, layer) => {
                 const p = feature.properties || {}
                 const title = p.area || "Flood area"
