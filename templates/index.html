@@ -1751,32 +1751,80 @@ ${
   <div class="section-c">
 
     <div class="grid">
-      <div class="card">
-        <h3>General operational intelligence summary</h3>
-        <div class="small">
-          This section provides a factual snapshot of observed river level states and reporting status derived from live dashboard feeds.
-        </div>
-        <div class="divider"></div>
-        <div class="small">
-          <b>Worst station currently:</b> ${esc(worstName)}
-          <span class="badge ${worstState === "High" ? "badge-high" : worstState === "Elevated" ? "badge-elev" : worstState === "Normal" ? "badge-norm" : "badge-data"}">${esc(worstState)}</span>
-          <span class="badge">${esc(worstFresh)}</span><br>
-          <span class="muted">River:</span> ${esc(worstRiver || "Unknown")}<br>
-          <span class="muted">Last reported:</span> ${esc(worstTime || "Unknown")}
-        </div>
-      
-        <h3>Site counts by state</h3>
-        <div class="kpi">
-          <div class="pill pill-high"><b>High</b> ${countsByState.High}</div>
-          <div class="pill pill-elev"><b>Elevated</b> ${countsByState.Elevated}</div>
-          <div class="pill pill-norm"><b>Normal</b> ${countsByState.Normal}</div>
-          <div class="pill pill-data"><b>No data</b> ${countsByState["No data"]}</div>
-        </div>
-    
-        <div class="divider"></div>
-
-        </div>
+  <div class="card">
+    <h3>General operational intelligence summary</h3>
+    <div class="small">
+      This section provides a factual snapshot of observed river level states and reporting status derived from live dashboard feeds.
     </div>
+    <div class="divider"></div>
+    <div class="small">
+      <b>Worst station currently:</b> ${esc(worstName)}
+      <span class="badge ${worstState === "High" ? "badge-high" : worstState === "Elevated" ? "badge-elev" : worstState === "Normal" ? "badge-norm" : "badge-data"}">${esc(worstState)}</span>
+      <span class="badge">${esc(worstFresh)}</span><br>
+      <span class="muted">River:</span> ${esc(worstRiver || "Unknown")}<br>
+      <span class="muted">Last reported:</span> ${esc(worstTime || "Unknown")}
+    </div>
+
+    <h3>Site counts by state</h3>
+    <div class="kpi">
+      <div class="pill pill-high"><b>High</b> ${countsByState.High}</div>
+      <div class="pill pill-elev"><b>Elevated</b> ${countsByState.Elevated}</div>
+      <div class="pill pill-norm"><b>Normal</b> ${countsByState.Normal}</div>
+      <div class="pill pill-data"><b>No data</b> ${countsByState["No data"]}</div>
+    </div>
+
+    <div class="divider"></div>
+  </div>
+
+  <div class="card">
+    <h3>Confirm river watch areas and top 3 stations</h3>
+
+    <div class="small"><b>River watch areas (top 3)</b></div>
+    ${
+      rivers && rivers.length
+        ? `<ol class="list" style="margin-top:6px">
+            ${rivers.slice(0, 3).map((rv) => {
+              const st = rv.worst || "No data"
+              const badge =
+                st === "High" ? "badge-high" : st === "Elevated" ? "badge-elev" : st === "Normal" ? "badge-norm" : "badge-data"
+              return `<li>
+                ${esc(rv.river)}
+                <span class="badge ${badge}">${esc(st)}</span>
+                <span class="badge">High ${Number(rv.high || 0)}</span>
+                <span class="badge">Elevated ${Number(rv.elevated || 0)}</span>
+              </li>`
+            }).join("")}
+          </ol>`
+        : `<div class="small muted" style="margin-top:6px">No river grouping available.</div>`
+    }
+
+    <div class="divider"></div>
+
+    <div class="small"><b>Top 3 stations to confirm</b></div>
+    ${
+      topStations && topStations.length
+        ? `<ol class="list" style="margin-top:6px">
+            ${topStations.slice(0, 3).map((r) => {
+              const it = r.item
+              const st = it.state || "No data"
+              const badge =
+                st === "High" ? "badge-high" : st === "Elevated" ? "badge-elev" : st === "Normal" ? "badge-norm" : "badge-data"
+              return `<li>
+                ${esc(it.label || it.id || "")}
+                <span class="badge ${badge}">${esc(st)}</span>
+                ${it.riverName ? `<span class="badge">${esc(it.riverName)}</span>` : ""}
+                ${r.freshness?.status ? `<span class="badge">${esc(r.freshness.status)}</span>` : ""}
+              </li>`
+            }).join("")}
+          </ol>`
+        : `<div class="small muted" style="margin-top:6px">No station data available.</div>`
+    }
+
+    <div class="small muted" style="margin-top:8px">
+      Confirm impacts with partner intelligence and local observation, especially where reporting is Delayed, Stale, or Offline.
+    </div>
+  </div>
+</div>
 
     <div class="grid" style="margin-top:12px">
       <div class="card">
