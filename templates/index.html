@@ -1408,6 +1408,9 @@ function toggleRiverLabels() {
     rebuildRiverLabels()
 }
 async function refreshFloodWarningsSummary() {
+  // Ensure we always have a safe default object
+  window.latestFloodWarnings = window.latestFloodWarnings || { alerts: 0, warnings: 0, severe: 0 }
+
   try {
     const res = await fetch("/api/flood-warnings-summary", { cache: "no-store", credentials: "same-origin" })
     if (!res.ok) return
@@ -1423,32 +1426,35 @@ async function refreshFloodWarningsSummary() {
     const previousSig = previous ? `${previous.severe}|${previous.warnings}|${previous.alerts}` : null
     const nextSig = `${nextSevere}|${nextWarnings}|${nextAlerts}`
 
+    // Update memory
     window.latestFloodWarnings = {
       alerts: nextAlerts,
       warnings: nextWarnings,
       severe: nextSevere,
       fetchedAtEpoch: data?.fetchedAtEpoch || null,
       changed: previousSig !== null && previousSig !== nextSig
-const box = document.getElementById("eaWarningsBox")
-const elSevere = document.getElementById("eaSevere")
-const elWarnings = document.getElementById("eaWarnings")
-const elAlerts = document.getElementById("eaAlerts")
-const elLast = document.getElementById("eaLast")
-
-if (elSevere) elSevere.textContent = String(nextSevere)
-if (elWarnings) elWarnings.textContent = String(nextWarnings)
-if (elAlerts) elAlerts.textContent = String(nextAlerts)
-
-if (elLast) {
-  elLast.textContent = data?.fetchedAtEpoch
-    ? new Date(data.fetchedAtEpoch * 1000).toLocaleString()
-    : "Unknown"
-}
-
-if (box) box.style.display = "block"
     }
+
+    // Update legend box, only if it exists (legend may not be created yet)
+    const box = document.getElementById("eaWarningsBox")
+    const elSevere = document.getElementById("eaSevere")
+    const elWarnings = document.getElementById("eaWarnings")
+    const elAlerts = document.getElementById("eaAlerts")
+    const elLast = document.getElementById("eaLast")
+
+    if (elSevere) elSevere.textContent = String(nextSevere)
+    if (elWarnings) elWarnings.textContent = String(nextWarnings)
+    if (elAlerts) elAlerts.textContent = String(nextAlerts)
+
+    if (elLast) {
+      elLast.textContent = data?.fetchedAtEpoch
+        ? new Date(data.fetchedAtEpoch * 1000).toLocaleString()
+        : "Unknown"
+    }
+
+    if (box) box.style.display = "block"
   } catch (e) {
-    // keep last known value if fetch fails
+    // Keep last known value if fetch fails
   }
 }
 async function exportSitrepPdf() {
