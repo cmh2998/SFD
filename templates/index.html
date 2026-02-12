@@ -540,23 +540,48 @@ function createLegendControl() {
     legend.onAdd = function() {
         const div = L.DomUtil.create("div", "legend")
         div.innerHTML = `
-            <h4>Status</h4>
+    <div id="eaWarningsBox" style="margin-bottom:10px; display:none;">
+        <h4>Flood warnings (EA)</h4>
 
-            <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.high}"></span>High</div><div><b id="countHigh">0</b></div></div>
-            <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.elevated}"></span>Elevated</div><div><b id="countElevated">0</b></div></div>
-            <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.normal}"></span>Normal</div><div><b id="countNormal">0</b></div></div>
-            <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.delayed}"></span>Delayed</div><div><b id="countDelayed">0</b></div></div>
-            <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.stale}"></span>Stale</div><div><b id="countStale">0</b></div></div>
-            <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.offline}"></span>Offline</div><div><b id="countOffline">0</b></div></div>
-            <div class="row"><div class="left"><span class="swatch muted" style="background:${COLOURS.nodata}"></span>No data</div><div><b id="countNoData">0</b></div></div>
+        <div class="row">
+            <div class="left"><span class="swatch" style="background:${COLOURS.high}"></span>Severe</div>
+            <div><b id="eaSevere">0</b></div>
+        </div>
 
-            <hr>
+        <div class="row">
+            <div class="left"><span class="swatch" style="background:${COLOURS.elevated}"></span>Warnings</div>
+            <div><b id="eaWarnings">0</b></div>
+        </div>
 
-            <div class="small">Last refreshed: <b id="lastRef">Never</b></div>
-            <div class="tiny">
-                Reading freshness: Live ≤ ${THRESHOLDS.liveHours}h, Delayed ≤ ${THRESHOLDS.delayedHours}h, Stale ≤ ${THRESHOLDS.staleHours}h, Offline &gt; ${THRESHOLDS.staleHours}h
-            </div>
-        `
+        <div class="row">
+            <div class="left"><span class="swatch" style="background:${COLOURS.normal}"></span>Alerts</div>
+            <div><b id="eaAlerts">0</b></div>
+        </div>
+
+        <div class="tiny" style="margin-top:6px;">
+            Last EA update: <b id="eaLast">Unknown</b>
+        </div>
+
+        <hr>
+    </div>
+
+    <h4>Status</h4>
+
+    <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.high}"></span>High</div><div><b id="countHigh">0</b></div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.elevated}"></span>Elevated</div><div><b id="countElevated">0</b></div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.normal}"></span>Normal</div><div><b id="countNormal">0</b></div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.delayed}"></span>Delayed</div><div><b id="countDelayed">0</b></div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.stale}"></span>Stale</div><div><b id="countStale">0</b></div></div>
+    <div class="row"><div class="left"><span class="swatch" style="background:${COLOURS.offline}"></span>Offline</div><div><b id="countOffline">0</b></div></div>
+    <div class="row"><div class="left"><span class="swatch muted" style="background:${COLOURS.nodata}"></span>No data</div><div><b id="countNoData">0</b></div></div>
+
+    <hr>
+
+    <div class="small">Last refreshed: <b id="lastRef">Never</b></div>
+    <div class="tiny">
+        Reading freshness: Live ≤ ${THRESHOLDS.liveHours}h, Delayed ≤ ${THRESHOLDS.delayedHours}h, Stale ≤ ${THRESHOLDS.staleHours}h, Offline &gt; ${THRESHOLDS.staleHours}h
+    </div>
+`
         return div
     }
 
