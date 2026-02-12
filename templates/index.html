@@ -1411,7 +1411,19 @@ async function refreshFloodWarningsSummary() {
 window.latestFloodWarnings ||= { alerts: 0, warnings: 0, severe: 0 }
 }
 async function exportSitrepPdf() {
-await refreshFloodWarningsSummary()
+  const win = window.open("", "_blank")
+  if (!win) {
+    alert("Popup blocked. Allow popups for this site to open the SITREP.")
+    return
+  }
+
+  // Optional: show something immediately so the user sees it worked
+  win.document.open()
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Generating SITREP</title></head>
+  <body style="font-family:Arial,Helvetica,sans-serif;padding:16px">Generating SITREP...</body></html>`)
+  win.document.close()
+
+  await refreshFloodWarningsSummary()
   const rows = latestLevelRows.slice()
 
   const stateWeight = (s) => (s === "High" ? 3 : s === "Elevated" ? 2 : s === "Normal" ? 1 : 0)
@@ -1616,12 +1628,7 @@ await refreshFloodWarningsSummary()
     return null
   })()
 
-  const win = window.open("", "_blank")
-  if (!win) {
-    alert("Popup blocked. Allow popups for this site to open the SITREP.")
-    return
-  }
-
+  win.document.open()
   win.document.write(`
 <!DOCTYPE html>
 <html>
