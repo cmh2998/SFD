@@ -1408,6 +1408,7 @@ async function refreshFloodWarningsSummary() {
   } catch (e) {
     // keep last known value if fetch fails
   }
+window.latestFloodWarnings ||= { alerts: 0, warnings: 0, severe: 0 }
 }
 async function exportSitrepPdf() {
 await refreshFloodWarningsSummary()
