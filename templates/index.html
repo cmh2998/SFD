@@ -1429,6 +1429,23 @@ async function refreshFloodWarningsSummary() {
       severe: nextSevere,
       fetchedAtEpoch: data?.fetchedAtEpoch || null,
       changed: previousSig !== null && previousSig !== nextSig
+const box = document.getElementById("eaWarningsBox")
+const elSevere = document.getElementById("eaSevere")
+const elWarnings = document.getElementById("eaWarnings")
+const elAlerts = document.getElementById("eaAlerts")
+const elLast = document.getElementById("eaLast")
+
+if (elSevere) elSevere.textContent = String(nextSevere)
+if (elWarnings) elWarnings.textContent = String(nextWarnings)
+if (elAlerts) elAlerts.textContent = String(nextAlerts)
+
+if (elLast) {
+  elLast.textContent = data?.fetchedAtEpoch
+    ? new Date(data.fetchedAtEpoch * 1000).toLocaleString()
+    : "Unknown"
+}
+
+if (box) box.style.display = "block"
     }
   } catch (e) {
     // keep last known value if fetch fails
