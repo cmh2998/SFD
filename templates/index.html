@@ -1384,7 +1384,7 @@ function toggleRiverLabels() {
 }
 async function refreshFloodWarningsSummary() {
   try {
-    const res = await fetch("/api/flood-warnings-summary", { cache: "no-store" })
+    const res = await fetch("/api/flood-warnings-summary", { cache: "no-store", credentials: "same-origin" })
     if (!res.ok) return
 
     const data = await res.json()
