@@ -1410,6 +1410,7 @@ async function refreshFloodWarningsSummary() {
   }
 }
 async function exportSitrepPdf() {
+await refreshFloodWarningsSummary()
   const rows = latestLevelRows.slice()
 
   const stateWeight = (s) => (s === "High" ? 3 : s === "Elevated" ? 2 : s === "Normal" ? 1 : 0)
