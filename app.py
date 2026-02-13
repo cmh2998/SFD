@@ -491,13 +491,21 @@ def _build_flood_warnings_geojson():
     maxLon = bbox["maxLon"]
     maxLat = bbox["maxLat"]
 
+    centre_lat = (minLat + maxLat) / 2
+    centre_lon = (minLon + maxLon) / 2
+
+    # Rough radius in km from bbox size, with a buffer
+    radius_km = max((maxLat - minLat) * 111, (maxLon - minLon) * 111) / 2
+    radius_km = radius_km + 20
+
+    # Use documented params: lat/long/dist and restrict to warnings (2) and severe (1)
     url = (
         "https://environment.data.gov.uk/flood-monitoring/id/floods"
-        f"?min-lat={minLat}&max-lat={maxLat}&min-long={minLon}&max-long={maxLon}"
+        f"?lat={centre_lat}&long={centre_lon}&dist={radius_km}&min-severity=2"
     )
 
     try:
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=20, headers={"Accept": "application/json"})
         if r.status_code != 200:
             out = {"type": "FeatureCollection", "features": []}
             _FLOODWARN_CACHE["ts"] = now
@@ -512,20 +520,23 @@ def _build_flood_warnings_geojson():
     features = []
     for it in items:
         fa = it.get("floodArea") or {}
+        if not isinstance(fa, dict):
+            continue
+
         poly = fa.get("polygon")
         if not poly:
             continue
 
         geom = None
 
-        # Case 1: EA returns geometry inline
+        # Case 1: geometry inline already
         if isinstance(poly, dict) and poly.get("type") and poly.get("coordinates"):
             geom = poly
 
-        # Case 2: EA returns a URL to polygon GeoJSON
-        elif isinstance(poly, str) and poly.startswith("http"):
+        # Case 2: polygon URL
+        elif isinstance(poly, str):
             try:
-                pr = requests.get(poly, timeout=20)
+                pr = requests.get(poly, timeout=20, headers={"Accept": "application/json"})
                 if pr.status_code == 200:
                     pj = pr.json()
 
@@ -533,10 +544,8 @@ def _build_flood_warnings_geojson():
                         feats = pj.get("features") or []
                         if feats and isinstance(feats[0], dict):
                             geom = (feats[0] or {}).get("geometry")
-
                     elif pj.get("type") == "Feature":
                         geom = pj.get("geometry")
-
                     elif pj.get("type") in ("Polygon", "MultiPolygon"):
                         geom = pj
             except Exception:
