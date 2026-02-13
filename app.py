@@ -516,7 +516,33 @@ def _build_flood_warnings_geojson():
         if not poly:
             continue
 
-        if not (isinstance(poly, dict) and poly.get("type") and poly.get("coordinates")):
+        geom = None
+
+        # Case 1: EA returns geometry inline
+        if isinstance(poly, dict) and poly.get("type") and poly.get("coordinates"):
+            geom = poly
+
+        # Case 2: EA returns a URL to polygon GeoJSON
+        elif isinstance(poly, str) and poly.startswith("http"):
+            try:
+                pr = requests.get(poly, timeout=20)
+                if pr.status_code == 200:
+                    pj = pr.json()
+
+                    if pj.get("type") == "FeatureCollection":
+                        feats = pj.get("features") or []
+                        if feats and isinstance(feats[0], dict):
+                            geom = (feats[0] or {}).get("geometry")
+
+                    elif pj.get("type") == "Feature":
+                        geom = pj.get("geometry")
+
+                    elif pj.get("type") in ("Polygon", "MultiPolygon"):
+                        geom = pj
+            except Exception:
+                geom = None
+
+        if not (isinstance(geom, dict) and geom.get("type") and geom.get("coordinates")):
             continue
 
         features.append(
@@ -530,7 +556,7 @@ def _build_flood_warnings_geojson():
                     "timeMessageChanged": it.get("timeMessageChanged"),
                     "area": fa.get("label") or fa.get("fwdCode") or "Flood area",
                 },
-                "geometry": poly,
+                "geometry": geom,
             }
         )
 
