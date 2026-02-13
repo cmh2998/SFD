@@ -511,28 +511,55 @@ def _build_flood_warnings_geojson():
 
     features = []
     for it in items:
-        fa = it.get("floodArea") or {}
-        poly = fa.get("polygon")
-        if not poly:
-            continue
+    fa = it.get("floodArea") or {}
+    poly = fa.get("polygon")
+    if not poly:
+        continue
 
-        if not (isinstance(poly, dict) and poly.get("type") and poly.get("coordinates")):
-            continue
+    geom = None
 
-        features.append(
-            {
-                "type": "Feature",
-                "properties": {
-                    "severity": it.get("severity"),
-                    "severityLevel": it.get("severityLevel"),
-                    "message": it.get("message"),
-                    "timeRaised": it.get("timeRaised"),
-                    "timeMessageChanged": it.get("timeMessageChanged"),
-                    "area": fa.get("label") or fa.get("fwdCode") or "Flood area",
-                },
-                "geometry": poly,
-            }
-        )
+    # Sometimes EA returns geometry directly
+    if isinstance(poly, dict) and poly.get("type") and poly.get("coordinates"):
+        geom = poly
+
+    # Usually EA returns a URL -> fetch it
+    elif isinstance(poly, str) and poly.startswith("http"):
+        try:
+            pr = requests.get(poly, timeout=20)
+            pr.raise_for_status()
+            pj = pr.json()
+
+            if pj.get("type") == "FeatureCollection":
+                feats = pj.get("features") or []
+                if feats and isinstance(feats[0], dict):
+                    geom = feats[0].get("geometry")
+
+            elif pj.get("type") == "Feature":
+                geom = pj.get("geometry")
+
+            elif pj.get("type") in ("Polygon", "MultiPolygon"):
+                geom = pj
+
+        except Exception:
+            geom = None
+
+    if not geom:
+        continue
+
+    features.append(
+        {
+            "type": "Feature",
+            "properties": {
+                "severity": it.get("severity"),
+                "severityLevel": it.get("severityLevel"),
+                "message": it.get("message"),
+                "timeRaised": it.get("timeRaised"),
+                "timeMessageChanged": it.get("timeMessageChanged"),
+                "area": fa.get("label") or fa.get("fwdCode") or "Flood area",
+            },
+            "geometry": geom,
+        }
+    )
 
     out = {"type": "FeatureCollection", "features": features}
     _FLOODWARN_CACHE["ts"] = now
