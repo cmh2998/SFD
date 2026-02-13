@@ -328,7 +328,13 @@ const BASELINE_KEY = "sfdb_sitrep_baseline_v1"
    Map init + panes
    ------------------------------------------------------------ */
 const map = L.map("map").setView([52.9, -2.05], 9)
+// ---- Z ordering panes ----
+map.createPane("polygonsPane")
+map.getPane("polygonsPane").style.zIndex = 350
+map.getPane("polygonsPane").style.pointerEvents = "auto"
 
+map.createPane("stationsPane")
+map.getPane("stationsPane").style.zIndex = 650
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors"
 }).addTo(map)
@@ -1275,29 +1281,24 @@ async function toggleWarnings() {
         if (warningsLayer) map.removeLayer(warningsLayer)
 
         warningsLayer = L.geoJSON(geo, {
-            style: (f) => {
-    const lvl = f?.properties?.severityLevel
-    let colour = "#ffd400"      // Flood Alert (yellow)
+    pane: "polygonsPane",
 
-    if (lvl === 2) colour = "#fdae61"   // Flood Warning (amber)
-    if (lvl === 1) colour = "#d7191c"   // Severe Flood Warning (red)
+    style: (f) => ({
+        color: "#c9091c",
+        weight: 2,
+        fillOpacity: 0.25
+    }),
 
-    return { color: colour, weight: 2, fillOpacity: 0.12 }
-},
-            onEachFeature: (feature, layer) => {
-                const p = feature.properties || {}
-                const title = p.area || "Flood area"
-                const sev = p.severity || ""
-                const when = p.timeMessageChanged || p.timeRaised || ""
-                const msg = p.message || ""
-                layer.bindPopup(
-                    `<b>${escapeHtml(title)}</b><br>` +
-                    `${escapeHtml(sev)}<br>` +
-                    `${escapeHtml(formatDateTime(when))}<br>` +
-                    `<div style="margin-top:6px">${escapeHtml(msg)}</div>`
-                )
-            }
-        }).addTo(map)
+    onEachFeature: (feature, layer) => {
+        const p = feature.properties || {}
+
+        layer.bindPopup(`
+            <b>${p.severity || "Flood warning"}</b><br>
+            ${p.area || ""}<br><br>
+            ${p.message || ""}
+        `)
+    }
+}).addTo(map)
     } catch (e) {}
 }
 
