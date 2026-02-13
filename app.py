@@ -88,7 +88,31 @@ BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 # Use this file name in your repo
 BOUNDARY_GEOJSON_PATH = BASE_DIR / "staffordshire_boundary.geojson"
+BASE_DIR = Path(__file__).resolve().parent
+app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
+# Use this file name in your repo
+BOUNDARY_GEOJSON_PATH = BASE_DIR / "staffordshire_boundary.geojson"
 
+
+# ---- Staffordshire boundary helper (ADD THIS BLOCK) ----
+from functools import lru_cache
+from shapely.geometry import shape
+from shapely.prepared import prep
+
+@lru_cache(maxsize=1)
+def _staffs_boundary_prepared():
+    with open(BOUNDARY_GEOJSON_PATH, "r", encoding="utf-8") as f:
+        gj = json.load(f)
+
+    if gj.get("type") == "Feature":
+        geom = shape(gj["geometry"])
+    elif gj.get("type") == "FeatureCollection":
+        geom = shape(gj["features"][0]["geometry"])
+    else:
+        geom = shape(gj)
+
+    return prep(geom)
+# ---- end helper ----
 # ----------------------------
 # Simple in-memory cache
 # ----------------------------
@@ -569,7 +593,21 @@ def _build_flood_warnings_geojson():
             }
         )
 
-    out = {"type": "FeatureCollection", "features": features}
+    # Filter to Staffordshire only (intersects the Staffordshire boundary GeoJSON)
+    staffs = _staffs_boundary_prepared()
+    filtered = []
+    for feat in features:
+        geom_json = feat.get("geometry")
+        if not geom_json:
+            continue
+        try:
+            g = shape(geom_json)
+            if staffs.intersects(g):
+                filtered.append(feat)
+        except Exception:
+            continue
+
+    out = {"type": "FeatureCollection", "features": filtered}
     _FLOODWARN_CACHE["ts"] = now
     _FLOODWARN_CACHE["geojson"] = out
     return out
