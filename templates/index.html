@@ -232,6 +232,11 @@
             0% { transform: translate(-50%, -50%) scale(1); opacity: 0.7; }
             100% { transform: translate(-50%, -50%) scale(3.2); opacity: 0; }
         }
+    /* Flood warning greyscale mode */
+    .map-greyscale .leaflet-tile-pane {
+        filter: grayscale(100%) contrast(1.05) brightness(1.03);
+        transition: filter 0.25s ease;
+    }
     </style>
 </head>
 
@@ -1259,8 +1264,14 @@ async function toggleRadar() {
 
 async function toggleWarnings() {
     warningsOn = !warningsOn
+
+    // If turning warnings OFF, remove layer and remove greyscale
     if (!warningsOn) {
-        if (warningsLayer) { map.removeLayer(warningsLayer); warningsLayer = null }
+        if (warningsLayer) {
+            map.removeLayer(warningsLayer)
+            warningsLayer = null
+        }
+        document.getElementById("map").classList.remove("map-greyscale")
         return
     }
 
@@ -1281,24 +1292,28 @@ async function toggleWarnings() {
         if (warningsLayer) map.removeLayer(warningsLayer)
 
         warningsLayer = L.geoJSON(geo, {
-    pane: "polygonsPane",
+            pane: "polygonsPane",
 
-    style: (f) => ({
-        color: "#c9091c",
-        weight: 2,
-        fillOpacity: 0.25
-    }),
+            style: (f) => ({
+                color: "#c9091c",
+                weight: 2,
+                fillOpacity: 0.25
+            }),
 
-    onEachFeature: (feature, layer) => {
-        const p = feature.properties || {}
+            onEachFeature: (feature, layer) => {
+                const p = feature.properties || {}
 
-        layer.bindPopup(`
-            <b>${p.severity || "Flood warning"}</b><br>
-            ${p.area || ""}<br><br>
-            ${p.message || ""}
-        `)
-    }
-}).addTo(map)
+                layer.bindPopup(`
+                    <b>${p.severity || "Flood warning"}</b><br>
+                    ${p.area || ""}<br><br>
+                    ${p.message || ""}
+                `)
+            }
+        }).addTo(map)
+
+        // Turn greyscale ON when warnings are ON
+        document.getElementById("map").classList.add("map-greyscale")
+
     } catch (e) {}
 }
 
