@@ -506,23 +506,25 @@ def _build_catchments_geojson():
 
 def _build_flood_warnings_geojson():
     now = time.time()
-    if _FLOODWARN_CACHE["geojson"] is not None and (now - _FLOODWARN_CACHE["ts"]) < _FLOODWARN_TTL_SECONDS:
+    if (
+        _FLOODWARN_CACHE["geojson"] is not None
+        and (now - _FLOODWARN_CACHE["ts"]) < _FLOODWARN_TTL_SECONDS
+    ):
         return _FLOODWARN_CACHE["geojson"]
 
+    # Staffordshire boundary (prepared) for fast intersects checks
+    staffs_prepped = _staffs_boundary_prepared()
+
+    # Use bbox only to pick a sensible query centre and radius
     _, bbox = _load_boundary_poly_and_bbox()
-    minLon = bbox["minLon"]
-    minLat = bbox["minLat"]
-    maxLon = bbox["maxLon"]
-    maxLat = bbox["maxLat"]
+    minLon, minLat, maxLon, maxLat = bbox["minLon"], bbox["minLat"], bbox["maxLon"], bbox["maxLat"]
 
     centre_lat = (minLat + maxLat) / 2
     centre_lon = (minLon + maxLon) / 2
 
-    # Rough radius in km from bbox size, with a buffer
     radius_km = max((maxLat - minLat) * 111, (maxLon - minLon) * 111) / 2
     radius_km = radius_km + 20
 
-    # Use documented params: lat/long/dist and restrict to warnings (2) and severe (1)
     url = (
         "https://environment.data.gov.uk/flood-monitoring/id/floods"
         f"?lat={centre_lat}&long={centre_lon}&dist={radius_km}&min-severity=2"
@@ -535,17 +537,17 @@ def _build_flood_warnings_geojson():
             _FLOODWARN_CACHE["ts"] = now
             _FLOODWARN_CACHE["geojson"] = out
             return out
-
         data = r.json()
         items = data.get("items", []) or []
     except Exception:
         items = []
 
     features = []
+
     for it in items:
         fa = it.get("floodArea") or {}
         if not isinstance(fa, dict):
-            continue
+            fa = {}
 
         poly = fa.get("polygon")
         if not poly:
@@ -563,7 +565,6 @@ def _build_flood_warnings_geojson():
                 pr = requests.get(poly, timeout=20, headers={"Accept": "application/json"})
                 if pr.status_code == 200:
                     pj = pr.json()
-
                     if pj.get("type") == "FeatureCollection":
                         feats = pj.get("features") or []
                         if feats and isinstance(feats[0], dict):
@@ -578,6 +579,23 @@ def _build_flood_warnings_geojson():
         if not (isinstance(geom, dict) and geom.get("type") and geom.get("coordinates")):
             continue
 
+        # Critical: drop anything that does not intersect Staffordshire
+        try:
+            g = shape(geom)
+            if g.is_empty or (not staffs_prepped.intersects(g)):
+                continue
+        except Exception:
+            continue
+
+        # Better area label
+        area_label = (
+            fa.get("label")
+            or fa.get("fwdCode")
+            or fa.get("notation")
+            or fa.get("@id")
+            or "Flood area"
+        )
+
         features.append(
             {
                 "type": "Feature",
@@ -587,27 +605,13 @@ def _build_flood_warnings_geojson():
                     "message": it.get("message"),
                     "timeRaised": it.get("timeRaised"),
                     "timeMessageChanged": it.get("timeMessageChanged"),
-                    "area": fa.get("label") or fa.get("fwdCode") or "Flood area",
+                    "area": area_label,
                 },
                 "geometry": geom,
             }
         )
 
-    # Filter to Staffordshire only (intersects the Staffordshire boundary GeoJSON)
-    staffs = _staffs_boundary_prepared()
-    filtered = []
-    for feat in features:
-        geom_json = feat.get("geometry")
-        if not geom_json:
-            continue
-        try:
-            g = shape(geom_json)
-            if staffs.intersects(g):
-                filtered.append(feat)
-        except Exception:
-            continue
-
-    out = {"type": "FeatureCollection", "features": filtered}
+    out = {"type": "FeatureCollection", "features": features}
     _FLOODWARN_CACHE["ts"] = now
     _FLOODWARN_CACHE["geojson"] = out
     return out
