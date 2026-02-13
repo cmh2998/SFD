@@ -507,21 +507,23 @@ def _build_catchments_geojson():
 def _build_flood_warnings_geojson():
     now = time.time()
     if (
-        _FLOODWARN_CACHE["geojson"] is not None
-        and (now - _FLOODWARN_CACHE["ts"]) < _FLOODWARN_TTL_SECONDS
+        _FLOODWARN_CACHE.get("geojson") is not None
+        and (now - _FLOODWARN_CACHE.get("ts", 0)) < _FLOODWARN_TTL_SECONDS
     ):
         return _FLOODWARN_CACHE["geojson"]
 
-    # Staffordshire boundary (prepared) for fast intersects checks
-    staffs_prepped = _staffs_boundary_prepared()
+    boundary_poly, bbox = _load_boundary_poly_and_bbox()
+    boundary_prepped = prep(boundary_poly)
 
-    # Use bbox only to pick a sensible query centre and radius
-    _, bbox = _load_boundary_poly_and_bbox()
-    minLon, minLat, maxLon, maxLat = bbox["minLon"], bbox["minLat"], bbox["maxLon"], bbox["maxLat"]
+    minLon = bbox["minLon"]
+    minLat = bbox["minLat"]
+    maxLon = bbox["maxLon"]
+    maxLat = bbox["maxLat"]
 
     centre_lat = (minLat + maxLat) / 2
     centre_lon = (minLon + maxLon) / 2
 
+    # Rough radius in km from bbox size, with a buffer
     radius_km = max((maxLat - minLat) * 111, (maxLon - minLon) * 111) / 2
     radius_km = radius_km + 20
 
@@ -530,6 +532,17 @@ def _build_flood_warnings_geojson():
         f"?lat={centre_lat}&long={centre_lon}&dist={radius_km}&min-severity=2"
     )
 
+    def _clean_text(s):
+        if s is None:
+            return None
+        if not isinstance(s, str):
+            s = str(s)
+        # Common encoding artefact in EA messages
+        s = s.replace("Â", "")
+        # Tidy whitespace a bit
+        s = s.replace("\r\n", "\n").replace("\r", "\n")
+        return s.strip()
+
     try:
         r = requests.get(url, timeout=20, headers={"Accept": "application/json"})
         if r.status_code != 200:
@@ -537,17 +550,17 @@ def _build_flood_warnings_geojson():
             _FLOODWARN_CACHE["ts"] = now
             _FLOODWARN_CACHE["geojson"] = out
             return out
+
         data = r.json()
         items = data.get("items", []) or []
     except Exception:
         items = []
 
     features = []
-
     for it in items:
         fa = it.get("floodArea") or {}
         if not isinstance(fa, dict):
-            fa = {}
+            continue
 
         poly = fa.get("polygon")
         if not poly:
@@ -579,22 +592,15 @@ def _build_flood_warnings_geojson():
         if not (isinstance(geom, dict) and geom.get("type") and geom.get("coordinates")):
             continue
 
-        # Critical: drop anything that does not intersect Staffordshire
+        # Hard filter to Staffordshire boundary
         try:
-            g = shape(geom)
-            if g.is_empty or (not staffs_prepped.intersects(g)):
+            shp = shape(geom)
+            if shp.is_empty:
+                continue
+            if not boundary_prepped.intersects(shp):
                 continue
         except Exception:
             continue
-
-        # Better area label
-        area_label = (
-            fa.get("label")
-            or fa.get("fwdCode")
-            or fa.get("notation")
-            or fa.get("@id")
-            or "Flood area"
-        )
 
         features.append(
             {
@@ -602,10 +608,11 @@ def _build_flood_warnings_geojson():
                 "properties": {
                     "severity": it.get("severity"),
                     "severityLevel": it.get("severityLevel"),
-                    "message": it.get("message"),
+                    "message": _clean_text(it.get("message")),
                     "timeRaised": it.get("timeRaised"),
                     "timeMessageChanged": it.get("timeMessageChanged"),
-                    "area": area_label,
+                    # Prefer label, fall back to code
+                    "area": fa.get("label") or fa.get("fwdCode") or "Flood area",
                 },
                 "geometry": geom,
             }
